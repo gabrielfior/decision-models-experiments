@@ -28,7 +28,6 @@ V = "/vol"
 
 image = (
     modal.Image.debian_slim(python_version="3.12")
-    .apt_install("git")
     .pip_install("torch==2.8.0", index_url="https://download.pytorch.org/whl/cu128")
     .pip_install(
         "transformers==5.17.0", "peft==0.21.0", "accelerate>=1.15.0", "datasets>=3.0",

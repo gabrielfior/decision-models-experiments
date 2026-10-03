@@ -1,0 +1,39 @@
+"""Tests for the JevBench-facing pieces: question -> row, label-free encoding, answer format."""
+import numpy as np
+import pytest
+
+import prepare as P
+import serve
+from tests.test_data import FakeTok
+
+
+def test_question_to_row_matches_flatten_conventions():
+    q = {"type": "choice", "instructions": "Pick.", "criteria": {"a": "A", "b": None}}
+    row = P.question_to_row("state text", q)
+    assert row["options"] == [("a", "A"), ("b", None)] and row["label"] is None and row["qtype"] == "choice"
+    noul = P.question_to_row("s", {"type": "noul", "instructions": "?", "criteria": None})
+    assert noul["options"] == [("no", None), ("yes", None)]
+    score = P.question_to_row({"k": "v"}, {"type": "score", "instructions": "?", "criteria": ["low", "high"]})
+    assert score["options"] == [("0", "low"), ("1", "high")] and score["state"] == "k: v"
+
+
+def test_encode_row_accepts_missing_label():
+    row = P.question_to_row("s", {"type": "choice", "instructions": "?", "criteria": {"a": None, "b": None}})
+    enc = P.encode_row(FakeTok(), row, shuffle=False)
+    assert enc["label"] is None and enc["n_options"] == 2
+
+
+def test_build_answer_formats_each_question_type_for_the_typesafe_adapter():
+    noul = serve.build_answer("noul", [("no", None), ("yes", None)], np.array([0.3, 0.7]))
+    assert noul == {"type": "noul", "noul": pytest.approx(0.7)}
+    choice = serve.build_answer("choice", [("a", None), ("b", None), ("c", None)], np.array([0.2, 0.5, 0.3]))
+    assert choice["type"] == "choice" and choice["choice"] == "b"
+    assert choice["probabilities"] == {"a": pytest.approx(0.2), "b": pytest.approx(0.5), "c": pytest.approx(0.3)}
+    score = serve.build_answer("score", [("0", "x"), ("1", "y")], np.array([0.9, 0.1]))
+    assert score == {"type": "score", "probabilities": {"0": pytest.approx(0.9), "1": pytest.approx(0.1)}}
+
+
+def test_build_answer_probabilities_sum_to_one_within_harness_tolerance():
+    p = np.array([1 / 3, 1 / 3, 1 / 3])
+    ans = serve.build_answer("choice", [("a", None), ("b", None), ("c", None)], p)
+    assert abs(sum(ans["probabilities"].values()) - 1) < 1e-3

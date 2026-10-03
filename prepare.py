@@ -192,19 +192,26 @@ def load_records(path: Path) -> list[dict]:
         return [json.loads(line) for line in f if line.strip()]
 
 
-def _option_list(q: dict) -> tuple[list[tuple[str, str | None]], int]:
-    """Turn a Kev question into an ordered option list and an integer label."""
-    t, crit, label = q["type"], q.get("criteria"), q["label"]
+def _option_list(q: dict) -> tuple[list[tuple[str, str | None]], int | None]:
+    """Turn a Kev/JevBench question into an ordered option list and an integer label (None if unlabeled)."""
+    t, crit, label = q["type"], q.get("criteria"), q.get("label")
     if t == "noul":
         crit = crit or {}
         options = [("no", crit.get("false")), ("yes", crit.get("true"))]
-        return options, int(bool(label))
+        return options, (None if label is None else int(bool(label)))
     if t == "score":
-        return [(str(i), desc) for i, desc in enumerate(crit)], int(label)
+        return [(str(i), desc) for i, desc in enumerate(crit)], (None if label is None else int(label))
     if t == "choice":
         keys = list(crit.keys())
-        return [(k, crit[k]) for k in keys], keys.index(label)
+        return [(k, crit[k]) for k in keys], (None if label is None else keys.index(label))
     raise ValueError(f"unknown question type {t!r}")
+
+
+def question_to_row(state, q: dict, qid: str = "decision", rid: str = "live") -> dict:
+    """A row for an unlabeled question at serving time (same layout as flatten())."""
+    options, label = _option_list(q)
+    return {"id": f"{rid}#{qid}", "group": rid, "family": "live", "qtype": q["type"], "state": as_text(state),
+            "instructions": as_text(q["instructions"]), "options": options, "label": label, "n_options": len(options)}
 
 
 def as_text(x) -> str:
@@ -355,7 +362,7 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
             perm = [int(i) for i in rng.permutation(n)]
         elif order == "reversed":
             perm = perm[::-1]
-    label = perm.index(row["label"])
+    label = None if row["label"] is None else perm.index(row["label"])
 
     state_ids = tok.encode(row["state"], add_special_tokens=False)[:MAX_STATE_TOKENS]
     instr_ids = tok.encode(row["instructions"], add_special_tokens=False)
@@ -420,7 +427,7 @@ def batches(tok, rows: list[dict], batch_size: int, shuffle_options: bool, rng=N
             "ids": ids.to(device), "attn": attn.to(device),
             "decide_pos": torch.tensor([e["decide_pos"] for e in encs], device=device),
             "opt_pos": opt_pos.to(device), "opt_mask": (opt_pos >= 0).to(device),
-            "label": torch.tensor([e["label"] for e in encs], device=device),
+            "label": torch.tensor([-1 if e["label"] is None else e["label"] for e in encs], device=device),
             "qtype": [e["qtype"] for e in encs], "n_options": [e["n_options"] for e in encs],
             "perm": [e["perm"] for e in encs], "id": [e["id"] for e in encs],
         }

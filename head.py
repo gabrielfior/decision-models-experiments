@@ -42,7 +42,8 @@ import torch.nn.functional as F
 
 # Edit these to run a variant. "layer" indexes the tapped-layer axis L (−1 = deepest tap).
 HEAD_CONFIG = {
-    "name": "pointer",            # "pointer" (Kev/Strands dot-product) or "cross_option" (options attend to each other first)
+    "name": "pointer",            # "pointer" (Kev/Strands dot-product), "cross_option" (options attend to each other first)
+                                  # or "hybrid" (pointer + w * the torso's own letter logits; needs cfg["letter_emb"] and LETTER_PREFIX)
     "width": 256,
     "layer": 1,                   # index into the tapped-layer axis: 0/1/2/3 = 50/67/83/100% depth
     "norm": True,                 # LayerNorm before q/k: shallow taps (norm 2-6) and deep taps (norm ~120) on one scale
@@ -131,8 +132,48 @@ class CrossOptionHead(nn.Module):
         return F.cross_entropy(logits, labels)
 
 
+class HybridHead(nn.Module):
+    """Pointer score plus the torso's own next-token logit for the option's slot letter (Mapika / Intern-Decision-2B).
+
+    With options presented as "A) ...", "B) ...", the base model's LM head at <decide> already ranks the
+    letters; with tied embeddings that logit is h_last · E[" A"], so no LM head has to be kept, only the
+    26 letter rows of the embedding table (`letter_emb`, a frozen buffer). The read-out is
+        z_j = pointer(h_ans, h_opts)_j + w * LN(h_ans[:, -1]) · letter_emb[j]        for slot j < 26,
+    with w a learned scalar (init 0.5) and a LayerNorm on the letter path's input. h_ans[:, -1] is the
+    deepest tap: in this repo the last layer's post-norm state, i.e. what the LM head would read.
+    Letter logits are indexed by PRESENTED slot, so this head is not permutation-equivariant by
+    construction; slots beyond the 26 letters (banking77) get the pointer score alone.
+    """
+
+    def __init__(self, d_model: int, width: int, layer: int, norm: bool, letter_emb):
+        super().__init__()
+        self.pointer = PointerHead(d_model, width, layer, norm)
+        emb = torch.as_tensor(letter_emb).detach().clone().float()
+        if emb.ndim != 2 or emb.shape[1] != d_model:
+            raise ValueError(f"letter_emb must be [n_letters, {d_model}], got {tuple(emb.shape)}")
+        self.register_buffer("letter_emb", emb)                # [26, d], frozen torso rows
+        self.letter_norm = nn.LayerNorm(d_model)
+        self.w = nn.Parameter(torch.tensor(0.5))
+
+    def letter_logits(self, h_ans: torch.Tensor, K: int) -> torch.Tensor:
+        last = self.letter_norm(h_ans[:, -1])                   # [B, d]
+        n = min(K, self.letter_emb.shape[0])
+        ll = last @ self.letter_emb[:n].t()                     # [B, n]
+        if n < K:
+            ll = F.pad(ll, (0, K - n))                          # no letter for slots >= 26: contribute 0
+        return ll
+
+    def forward(self, h_ans: torch.Tensor, h_opts: torch.Tensor, opt_mask: torch.Tensor) -> torch.Tensor:
+        z = self.pointer(h_ans, h_opts, opt_mask) + self.w * self.letter_logits(h_ans, opt_mask.shape[1])
+        return z.masked_fill(~opt_mask, MASK_VALUE)
+
+    def loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        return F.cross_entropy(logits, labels)
+
+
 def build_head(d_model: int, n_layers: int, cfg: dict | None = None) -> nn.Module:
-    """Construct the head the trainer will optimise. n_layers = len(prepare.TAP_LAYERS)."""
+    """Construct the head the trainer will optimise. n_layers = len(prepare.TAP_LAYERS).
+    For name == "hybrid", cfg["letter_emb"] ([26, d] tensor or array from the cache / torso) is required."""
     cfg = {**HEAD_CONFIG, **(cfg or {})}
     if cfg["name"] == "pointer":
         return PointerHead(d_model, cfg["width"], cfg["layer"], cfg.get("norm", False))
@@ -140,4 +181,8 @@ def build_head(d_model: int, n_layers: int, cfg: dict | None = None) -> nn.Modul
         return CrossOptionHead(d_model, cfg["width"], cfg["layer"], cfg.get("norm", True),
                                cfg.get("heads", 4), cfg.get("ffn", 512), cfg.get("dropout", 0.1),
                                cfg.get("residual_pointer", False))
+    if cfg["name"] == "hybrid":
+        if cfg.get("letter_emb") is None:
+            raise ValueError("head 'hybrid' needs cfg['letter_emb'] ([26, d] letter embeddings from the cache or torso)")
+        return HybridHead(d_model, cfg["width"], cfg["layer"], cfg.get("norm", True), cfg["letter_emb"])
     raise ValueError(f"unknown head {cfg['name']!r}")

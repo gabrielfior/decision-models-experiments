@@ -155,3 +155,53 @@ def test_code_hash_changes_when_an_editable_file_changes(tmp_path, monkeypatch):
     b = P.code_hash()
     (tmp_path / "x.py").write_text("two")
     assert a != b and b != P.code_hash() and len(b) == 8
+
+
+# ---- hybrid read-out: letter embeddings through the cache ----------------------------
+class _FakeTorso(torch.nn.Module):
+    def __init__(self, vocab=1000, d=8):
+        super().__init__()
+        self.emb = torch.nn.Embedding(vocab, d)
+
+    def get_input_embeddings(self):
+        return self.emb
+
+
+def test_letter_embeddings_reads_the_torso_embedding_rows_for_the_letter_tokens():
+    torso, tok = _FakeTorso(), FakeTok()
+    e = P.letter_embeddings(torso, tok)
+    ids = P.letter_token_ids(tok)
+    assert e.shape == (26, 8) and not e.requires_grad
+    assert torch.allclose(e, torso.emb.weight[ids].detach())
+
+
+def test_tier_a_builds_the_hybrid_head_with_letter_emb_from_the_cache(tmp_path, monkeypatch):
+    import head as head_mod
+    rng = np.random.default_rng(9)
+    letter_emb = rng.normal(size=(26, 16)).astype(np.float16)
+    for name, n in (("train", 200), ("dev", 100), ("heldout", 40)):
+        _synthetic_cache(tmp_path / f"{name}.npz", n, seed=n)
+        z = dict(np.load(tmp_path / f"{name}.npz"))
+        np.savez(tmp_path / f"{name}.npz", letter_emb=letter_emb, **z)
+    monkeypatch.setattr(head_mod, "HEAD_CONFIG", {**head_mod.HEAD_CONFIG, "name": "hybrid"})
+    built = []
+    orig = head_mod.build_head
+
+    def spy(d, L, cfg=None):
+        built.append(cfg)
+        return orig(d, L, cfg)
+    monkeypatch.setattr(head_mod, "build_head", spy)
+    rep = P.tier_a(head_mod, cache_dir=tmp_path, seeds=(0,), epochs=2, note="hybrid", results_path=tmp_path / "r.tsv",
+                   baseline=None, save_dir=tmp_path / "out")
+    assert built and torch.allclose(built[0]["letter_emb"], torch.from_numpy(letter_emb.astype(np.float32)))
+    assert rep["head"]["name"] == "hybrid" and "letter_emb" not in rep["head"]     # config stays JSON-able
+    assert json.loads((tmp_path / "out" / "head.json").read_text())["head"]["name"] == "hybrid"
+
+
+def test_tier_a_hybrid_without_letter_emb_in_the_cache_fails_clearly(tmp_path, monkeypatch):
+    import head as head_mod
+    for name, n in (("train", 50), ("dev", 30), ("heldout", 10)):
+        _synthetic_cache(tmp_path / f"{name}.npz", n, seed=n)
+    monkeypatch.setattr(head_mod, "HEAD_CONFIG", {**head_mod.HEAD_CONFIG, "name": "hybrid"})
+    with pytest.raises(ValueError, match="letter_emb"):
+        P.tier_a(head_mod, cache_dir=tmp_path, seeds=(0,), epochs=1, note="x", results_path=tmp_path / "r.tsv", baseline=None)

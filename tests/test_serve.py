@@ -61,3 +61,15 @@ def test_tta_orders_lists_distinct_orders_up_to_n():
     assert serve.tta_orders(2) == ["identity", "reversed"]
     assert serve.tta_orders(4) == ["identity", "reversed", "shift:1", "shift:2"]
     assert len(set(serve.tta_orders(8))) == 8
+
+
+def test_complete_head_cfg_adds_letter_emb_and_turns_on_the_prefix_only_for_hybrid():
+    import torch
+    from tests.test_harness import _FakeTorso
+    torso, tok = _FakeTorso(), FakeTok()
+    cfg, prefix = serve.complete_head_cfg({"name": "hybrid", "width": 32, "layer": -1, "norm": True}, torso, tok)
+    assert prefix is True and cfg["name"] == "hybrid" and cfg["letter_emb"].shape == (26, 8)
+    assert torch.allclose(cfg["letter_emb"], torso.emb.weight[P.letter_token_ids(tok)].detach())
+    cfg2, prefix2 = serve.complete_head_cfg({"name": "pointer", "width": 32, "layer": -1, "norm": True}, torso, tok)
+    assert prefix2 is False and "letter_emb" not in cfg2
+    assert serve.complete_head_cfg(None, torso, tok) == (None, False)

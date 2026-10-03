@@ -59,6 +59,13 @@ QWEN_MARKERS = {
 }
 MAX_STATE_TOKENS, MAX_INSTR_TOKENS, MAX_ROW_TOKENS = 384, 512, 2048
 
+# Hybrid read-out (head "hybrid"): each presented option is prefixed with its slot letter, "A) ", "B) ", ...
+# in PRESENTED order (after shuffling the letter follows the position, not the option), so the torso's own
+# next-token logit for " A", " B", ... at <decide> — h_last · E[letter] with tied embeddings — can be read
+# alongside the pointer score. Default OFF; train.py / serve.py switch it on when the head is "hybrid".
+LETTER_PREFIX = False
+LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
 # The torso ladder (plan §3). Each torso brings its own single-token markers (chosen from tokens
 # the tokenizer already has) and the depths tapped for the read-out, at 50/67/83/100% of depth.
 TORSOS = {
@@ -389,8 +396,26 @@ def option_text(qtype: str, key: str, desc: str | None) -> str:
     return f"{key}: {desc}" if desc else key
 
 
+def letter_token_ids(tok) -> list[int]:
+    """Token id of " A", " B", ... " Z" (one per LETTERS entry). Qwen's tokenizer has each as a single
+    token; a tokenizer that splits one falls back to that letter's first id."""
+    ids = []
+    for c in LETTERS:
+        enc = tok.encode(" " + c, add_special_tokens=False)
+        ids.append(int(enc[0]))              # single token for Qwen; else the first piece
+    return ids
+
+
+def letter_embeddings(model, tok):
+    """The torso's input-embedding rows for the letter tokens, [26, d], detached (the frozen table; with tied
+    embeddings these rows are also the LM-head rows, so h_last · E[letter] is the next-token logit)."""
+    import torch
+    with torch.no_grad():
+        return model.get_input_embeddings().weight[torch.as_tensor(letter_token_ids(tok))].detach().clone()
+
+
 def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = False, rng=None,
-               order: str = "identity") -> dict:
+               order: str = "identity", letter_prefix: bool | None = None) -> dict:
     """Tokenise one row as  <state> s </state>?  — see the layout note next to QWEN_MARKERS.
 
         [state] s_1..s_n [q] i_1..i_m ([opt] o_1..o_k [opt_end])*N [decide]
@@ -399,7 +424,11 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
     opt_pos (one per option, at its [opt_end]). With shuffle=True a choice question's
     options are permuted and the label moves with them; noul and score keep their order
     because the order carries meaning (no/yes, increasing level).
+    letter_prefix (None = module LETTER_PREFIX) prefixes the option shown in slot j with
+    f"{LETTERS[j]}) " for j < 26, for the hybrid letter-logit read-out.
     """
+    if letter_prefix is None:
+        letter_prefix = LETTER_PREFIX
     m = {k: tok.convert_tokens_to_ids(v) for k, v in markers.items()}
     n = row["n_options"]
     perm = list(range(n))
@@ -416,7 +445,10 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
 
     state_ids = tok.encode(row["state"], add_special_tokens=False)[:MAX_STATE_TOKENS]
     instr_ids = tok.encode(row["instructions"], add_special_tokens=False)[:MAX_INSTR_TOKENS]
-    opt_ids = [tok.encode(option_text(row["qtype"], *row["options"][j]), add_special_tokens=False) for j in perm]
+    def _shown(slot: int, j: int) -> str:
+        text = option_text(row["qtype"], *row["options"][j])
+        return f"{LETTERS[slot]}) {text}" if letter_prefix and slot < len(LETTERS) else text
+    opt_ids = [tok.encode(_shown(slot, j), add_special_tokens=False) for slot, j in enumerate(perm)]
 
     fixed = len(state_ids) + len(instr_ids) + 3 + 2 * n
     budget = MAX_ROW_TOKENS - fixed
@@ -457,15 +489,18 @@ def load_torso(name: str, dtype=None, device: str = "cpu"):
 
 
 def batches(tok, rows: list[dict], batch_size: int, shuffle_options: bool, rng=None, device: str = "cpu",
-            order: str = "identity", shuffle_rows: bool = False, markers: dict = QWEN_MARKERS):
-    """Encode rows and yield right-padded tensor batches with the read-out positions."""
+            order: str = "identity", shuffle_rows: bool = False, markers: dict = QWEN_MARKERS,
+            letter_prefix: bool | None = None):
+    """Encode rows and yield right-padded tensor batches with the read-out positions.
+    letter_prefix is passed through to encode_row (None = module LETTER_PREFIX)."""
     import torch
     idx = list(range(len(rows)))
     if shuffle_rows:
         (rng or np.random.default_rng()).shuffle(idx)
     pad_id = getattr(tok, "pad_token_id", None) or 0
     for start in range(0, len(idx), batch_size):
-        encs = [encode_row(tok, rows[i], markers, shuffle=shuffle_options, rng=rng, order=order) for i in idx[start:start + batch_size]]
+        encs = [encode_row(tok, rows[i], markers, shuffle=shuffle_options, rng=rng, order=order, letter_prefix=letter_prefix)
+                for i in idx[start:start + batch_size]]
         B, T, K = len(encs), max(len(e["ids"]) for e in encs), max(e["n_options"] for e in encs)
         ids = torch.full((B, T), pad_id, dtype=torch.long)
         attn = torch.zeros((B, T), dtype=torch.long)
@@ -648,6 +683,9 @@ def cache_features(torso_name: str, splits=("train", "dev", "heldout"), batch_si
         h_ans   [N, L, d]          state at <decide>
         h_opts  [sum_i n_i, L, d]  state at each </opt>, rows of question i at offsets[i]:offsets[i+1]
         offsets, labels, qtypes, n_options, ids, d_model
+        letter_emb  [26, d]        input-embedding rows of " A".." Z" (hybrid head; the deepest tap of h_ans
+                                   is the last layer's post-norm state at <decide>, so h_ans[:, -1] · letter_emb
+                                   is the torso's own letter logit)
     Option order is the canonical one. This is the measurement step of the plan: a few
     observables taken from a large state, after which the torso leaves the loop.
     """
@@ -660,6 +698,7 @@ def cache_features(torso_name: str, splits=("train", "dev", "heldout"), batch_si
     markers, taps = cfg["markers"], cfg["tap_layers"]
     tok, model, d = load_torso(torso_name, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device=device)
     model.eval()
+    letter_emb = letter_embeddings(model, tok).to(torch.float16).cpu().numpy()
     for split in splits:
         rows = load_split(split)
         h_ans, h_opts, labels, qtypes, n_opts, ids = [], [], [], [], [], []
@@ -678,7 +717,7 @@ def cache_features(torso_name: str, splits=("train", "dev", "heldout"), batch_si
         n_opts = np.array(n_opts)
         np.savez(out_dir / f"{split}.npz", h_ans=np.concatenate(h_ans), h_opts=np.concatenate(h_opts),
                  offsets=np.concatenate([[0], np.cumsum(n_opts)]), labels=np.array(labels), qtypes=np.array(qtypes),
-                 n_options=n_opts, ids=np.array(ids), d_model=d, tap_layers=np.array(taps))
+                 n_options=n_opts, ids=np.array(ids), d_model=d, tap_layers=np.array(taps), letter_emb=letter_emb)
         print(f"{split}: wrote {len(ids)} rows in {time.time() - t0:.0f}s -> {out_dir / (split + '.npz')}", flush=True)
 
 
@@ -743,11 +782,17 @@ def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-B
     cdir = Path(cache_dir or (globals()["cache_dir"]() / torso))
     train, dev, held = (_load_cache(cdir / f"{s}.npz") for s in ("train", "dev", "heldout"))
     d, L = int(train["d_model"]), train["h_ans"].shape[1]
+    # The hybrid head reads the torso's letter embeddings, which only the cache (not HEAD_CONFIG) carries.
+    build_cfg = None
+    if head_mod.HEAD_CONFIG.get("name") == "hybrid":
+        if "letter_emb" not in train:
+            raise ValueError(f"head 'hybrid' needs letter_emb in the cache; re-run `prepare.py cache` ({cdir / 'train.npz'} has none)")
+        build_cfg = {"letter_emb": torch.from_numpy(train["letter_emb"].astype(np.float32))}
     reports = []
     for seed in seeds:
         torch.manual_seed(seed)
         rng = np.random.default_rng(seed)
-        head = head_mod.build_head(d, L).to(device)
+        head = head_mod.build_head(d, L, build_cfg).to(device)
         opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=weight_decay)
         for _ in range(epochs):
             head.train()

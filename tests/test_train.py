@@ -117,3 +117,16 @@ def test_reshuffled_batch_gives_same_rows_with_a_different_option_perm():
         if q != "choice":
             assert b1["perm"][i] == b2["perm"][i] == list(range(b1["n_options"][i]))
     assert b2["ids"].shape[0] == b1["ids"].shape[0] and b2["opt_mask"].shape == b1["opt_mask"].shape
+def test_hybrid_head_setup_gives_letter_emb_and_prefix_only_for_hybrid(monkeypatch):
+    from tests.test_data import FakeTok
+    from tests.test_harness import _FakeTorso
+    torso, tok = _FakeTorso(), FakeTok()
+    monkeypatch.setattr(P, "LETTER_PREFIX", False)
+    monkeypatch.setattr(train.head_mod, "HEAD_CONFIG", {**train.head_mod.HEAD_CONFIG, "name": "hybrid"})
+    extra = train.hybrid_head_setup(torso, tok)
+    assert extra["letter_emb"].shape == (26, 8) and P.LETTER_PREFIX is True
+    heads = [train.head_mod.build_head(8, 4, {**c, **extra}) for c in train.head_configs(4, depth_heads=True)]
+    assert len(heads) == 4 and all(type(h).__name__ == "HybridHead" for h in heads)
+    monkeypatch.setattr(P, "LETTER_PREFIX", False)
+    monkeypatch.setattr(train.head_mod, "HEAD_CONFIG", {**train.head_mod.HEAD_CONFIG, "name": "pointer"})
+    assert train.hybrid_head_setup(torso, tok) == {} and P.LETTER_PREFIX is False

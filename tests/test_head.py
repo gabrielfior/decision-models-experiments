@@ -9,6 +9,7 @@ Interface the frozen Tier A trainer relies on:
       logits:   [B, K]        one score per option; masked options are very negative
     loss = head.loss(logits, labels)   scalar
 """
+import pytest
 import torch
 
 import head as head_mod
@@ -36,14 +37,51 @@ def test_logits_have_one_score_per_option_and_mask_missing_options():
     assert probs[0, 3:].max().item() < 1e-6
 
 
-def test_pointer_head_is_equivariant_to_option_permutation():
+# Scoped to the set-structured heads: the hybrid head reads letter logits by presented SLOT, so it is
+# not permutation-equivariant by construction (its own test below checks shapes, masking and the letter path).
+@pytest.mark.parametrize("cfg", [{"name": "pointer"}, {"name": "cross_option", "width": 32, "heads": 4, "ffn": 64}])
+def test_pointer_and_cross_option_heads_are_equivariant_to_option_permutation(cfg):
     torch.manual_seed(0)
-    head = head_mod.build_head(D, L)
+    head = head_mod.build_head(D, L, cfg)
+    head.eval()
     h_ans, h_opts, mask, _ = _batch()
     perm = torch.tensor([2, 0, 4, 1, 3])
     base = head(h_ans, h_opts, mask)[1]  # row 1 has all K options
     permuted = head(h_ans, h_opts[:, :, perm], mask[:, perm])[1]
     assert torch.allclose(permuted, base[perm], atol=1e-5)
+
+
+def _letter_emb(seed, d=D):
+    return torch.randn(26, d, generator=torch.Generator().manual_seed(seed))
+
+
+def test_hybrid_head_keeps_shapes_and_masking_and_reads_the_letter_embeddings():
+    h_ans, h_opts, mask, labels = _batch()
+    torch.manual_seed(0)
+    hybrid = head_mod.build_head(D, L, {"name": "hybrid", "width": 32, "letter_emb": _letter_emb(1)})
+    torch.manual_seed(0)
+    pointer = head_mod.build_head(D, L, {"name": "pointer", "width": 32})
+    torch.manual_seed(0)
+    other = head_mod.build_head(D, L, {"name": "hybrid", "width": 32, "letter_emb": _letter_emb(2)})
+    logits = hybrid(h_ans, h_opts, mask)
+    assert logits.shape == (B, K) and torch.softmax(logits, -1)[0, 3:].max().item() < 1e-6
+    assert not torch.allclose(logits[1], other(h_ans, h_opts, mask)[1])          # letter_emb changes the output
+    assert hybrid.w.item() == pytest.approx(0.5) and hybrid.w.requires_grad        # learned mixing scalar, init 0.5
+    assert not hybrid.letter_emb.requires_grad                                     # frozen torso rows, a buffer
+    hybrid.loss(logits, labels).backward()
+    assert hybrid.w.grad is not None and hybrid.w.grad.abs().item() > 0
+    with torch.no_grad():
+        hybrid.w.zero_()
+    assert torch.allclose(hybrid(h_ans, h_opts, mask), pointer(h_ans, h_opts, mask), atol=1e-5)   # w = 0 -> plain pointer
+    # more than 26 presented options: letter logits exist only for the first 26 slots, the rest is pointer-only
+    Kbig = 30
+    ho = torch.randn(B, L, Kbig, D)
+    mb = torch.ones(B, Kbig, dtype=torch.bool)
+    assert hybrid(h_ans, ho, mb).shape == (B, Kbig)
+    head_mod.build_head(D, L, {"name": "hybrid", "width": 32, "letter_emb": _letter_emb(1).numpy()})   # numpy accepted
+    with pytest.raises(ValueError, match="letter_emb"):
+        head_mod.build_head(D, L, {"name": "hybrid", "width": 32})
+    assert head_mod.HEAD_CONFIG["name"] == "pointer"                              # default head unchanged
 
 
 def test_loss_decreases_on_a_learnable_toy_problem():

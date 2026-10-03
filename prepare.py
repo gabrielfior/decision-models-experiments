@@ -192,10 +192,18 @@ def _ece(conf: np.ndarray, correct: np.ndarray, n_bins: int) -> float:
     return float(ece)
 
 
+def noise_floor(baseline_selection, candidate_selection, selection_se: float) -> float:
+    """The standard error the gate measures against: the larger of the dev-set SE (how much the
+    score would move if we drew another 2k dev rows) and the seed SE (how much it moves if we
+    retrain the same head with another seed). Both are noise; the gate must clear both."""
+    seed_ses = [float(np.std(x, ddof=1)) / math.sqrt(len(x)) for x in (baseline_selection, candidate_selection) if len(x) > 1]
+    return max([float(selection_se), *seed_ses])
+
+
 def keep(baseline_selection, candidate_selection, selection_se: float) -> bool:
-    """The keep rule: the mean over seeds must improve by MORE than GATE_SE standard errors."""
+    """The keep rule: the mean over seeds must improve by MORE than GATE_SE noise floors."""
     delta = float(np.mean(candidate_selection)) - float(np.mean(baseline_selection))
-    return delta > GATE_SE * selection_se
+    return delta > GATE_SE * noise_floor(baseline_selection, candidate_selection, selection_se)
 
 
 # ----------------------------------------------------------------------------
@@ -545,7 +553,7 @@ def evaluate(dev_a: list[dict], dev_b: list[dict], heldout: list[dict], temps: d
 
 
 RESULT_COLUMNS = ["timestamp", "commit", "tier", "note", "seeds", "dev_selection", "dev_se", "dev_acc", "dev_brier",
-                  "dev_ece", "heldout_acc", "heldout_brier", "order_sens", "p50_ms", "kept"]
+                  "dev_ece", "heldout_acc", "heldout_brier", "order_sens", "p50_ms", "kept", "per_seed", "baseline"]
 
 
 def git_commit() -> str:
@@ -571,17 +579,25 @@ def append_results(rep: dict, path: Path = RESULTS_TSV, commit: str | None = Non
 def _fmt(v) -> str:
     if isinstance(v, float):
         return f"{v:.4f}"
+    if isinstance(v, (list, tuple)):
+        return ",".join(_fmt(x) for x in v)
+    if v is None:
+        return ""
     return str(v).replace("\t", " ").replace("\n", " ")
 
 
-def read_baseline(path: Path = RESULTS_TSV, tier: str = "A") -> float | None:
-    """The dev selection score of the most recent KEPT experiment of this tier, or None."""
+def read_baseline(path: Path = RESULTS_TSV, tier: str = "A") -> list[float] | None:
+    """Per-seed dev selection scores of the most recent KEPT experiment of this tier, or None.
+    Falls back to the single mean when the row predates per-seed logging."""
     path = Path(path)
     if not path.exists():
         return None
     import csv
     kept = [r for r in csv.DictReader(open(path), delimiter="\t") if r["tier"] == tier and r["kept"] == "True"]
-    return float(kept[-1]["dev_selection"]) if kept else None
+    if not kept:
+        return None
+    per_seed = kept[-1].get("per_seed", "")
+    return [float(x) for x in per_seed.split(",")] if per_seed else [float(kept[-1]["dev_selection"])]
 
 
 # ----------------------------------------------------------------------------
@@ -729,12 +745,15 @@ def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-B
     agg.update(p50_ms=float("nan"), tier="A", note=note, seeds=len(reports), per_seed=[r["dev_selection"] for r in reports],
                temps=reports[-1]["temps"], head=dict(head_mod.HEAD_CONFIG))
     base = read_baseline(results_path) if baseline == "auto" else baseline
+    if isinstance(base, (int, float)):
+        base = [float(base)]
     agg["baseline"] = base
-    agg["kept"] = True if base is None else keep([base], agg["per_seed"], agg["dev_se"])
+    agg["kept"] = True if base is None else keep(base, agg["per_seed"], agg["dev_se"])
+    agg["noise_floor"] = None if base is None else noise_floor(base, agg["per_seed"], agg["dev_se"])
     append_results(agg, path=results_path)
     verdict = "KEEP" if agg["kept"] else "DISCARD"
     print(f"{verdict}: dev selection {agg['dev_selection']:.4f} ± {agg['dev_se']:.4f} (per seed {['%.4f' % s for s in agg['per_seed']]})"
-          f" vs baseline {base}; acc {agg['dev_acc']:.3f} brier {agg['dev_brier']:.3f} ece {agg['dev_ece']:.3f}"
+          f" vs baseline {base} (noise floor {agg['noise_floor']}); acc {agg['dev_acc']:.3f} brier {agg['dev_brier']:.3f} ece {agg['dev_ece']:.3f}"
           f" heldout acc {agg['heldout_acc']:.3f} order_sens {agg['order_sens']:.3f}")
     return agg
 

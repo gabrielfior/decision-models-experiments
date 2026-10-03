@@ -83,7 +83,7 @@ def test_append_results_writes_one_row_with_the_program_columns(tmp_path):
     with open(path) as f:
         rows = list(csv.DictReader(f, delimiter="\t"))
     assert len(rows) == 2 and rows[0]["commit"] == "abc1234" and rows[0]["kept"] == "True"
-    assert list(rows[0].keys()) == P.RESULT_COLUMNS
+    assert list(rows[0].keys()) == P.RESULT_COLUMNS and rows[0]["per_seed"] == ""
 
 
 # ---- Tier A on a synthetic cache ----------------------------------------------------

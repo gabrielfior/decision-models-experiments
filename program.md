@@ -48,8 +48,11 @@ Promote at most the top three Tier A results per day to Tier B.
   0.5 × ( (accuracy − chance)/(1 − chance) + (1 − Brier) ).
   Brier is the multi-class sum Σ(p_i − y_i)², the same convention as JevBench.
 - A change is KEPT only if its 3-seed mean dev score beats the current baseline's
-  3-seed mean by MORE than two standard errors of the dev score (`selection_se`).
-  Otherwise `git checkout -- head.py` (or `train.py`) and move on.
+  3-seed mean by MORE than two noise floors, where the noise floor is the larger of
+  the dev-set standard error (`selection_se`, ~0.011 at 2k rows) and the seed standard
+  error (std over seeds / √3). The first pointer baseline had a seed spread three times
+  the dev SE, so the seed term is what usually binds. Otherwise `git checkout -- head.py`
+  (or `train.py`) and move on.
 - Why two standard errors: Strands v17 → v19 moved JevBench by three decisions out
   of 231, and their hard-tier score did not move at all. A loop selecting on a few
   hundred items chases noise within an afternoon. 2k dev rows × 3 seeds × a 2-SE
@@ -86,4 +89,4 @@ Promote at most the top three Tier A results per day to Tier B.
 
 ## results.tsv columns
 
-    timestamp  commit  tier  note  seeds  dev_selection  dev_se  dev_acc  dev_brier  dev_ece  heldout_acc  heldout_brier  order_sens  p50_ms  kept
+    timestamp  commit  tier  note  seeds  dev_selection  dev_se  dev_acc  dev_brier  dev_ece  heldout_acc  heldout_brier  order_sens  p50_ms  kept  per_seed  baseline

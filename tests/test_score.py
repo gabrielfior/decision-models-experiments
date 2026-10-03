@@ -84,3 +84,11 @@ def test_keep_rule_requires_more_than_two_standard_errors():
     assert prepare.keep(base, [0.53, 0.52, 0.53], se) is True   # +0.027 > 0.02
     assert prepare.keep(base, [0.515, 0.51, 0.52], se) is False  # +0.015 < 0.02
     assert prepare.keep(base, [0.50, 0.51, 0.49], se) is False   # no change
+
+
+def test_keep_rule_noise_floor_is_the_larger_of_dev_se_and_seed_se():
+    # seeds disagree wildly: seed std 0.03 -> seed SE 0.0173 > dev SE 0.01, so the bar is 2 * 0.0173
+    base = [0.26, 0.29, 0.32]
+    assert prepare.keep(base, [0.31, 0.31, 0.31], 0.01) is False    # +0.02 clears 2*dev_se but not 2*seed_se
+    assert prepare.keep(base, [0.33, 0.33, 0.33], 0.01) is True     # +0.04 clears both
+    assert prepare.noise_floor(base, [0.31, 0.31, 0.31], 0.01) == pytest.approx(0.03 / 3**0.5, rel=1e-6)

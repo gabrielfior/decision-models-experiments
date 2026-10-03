@@ -498,7 +498,7 @@ def evaluate(dev_a: list[dict], dev_b: list[dict], heldout: list[dict], temps: d
     dev = score_preds(dev_a, temps)
     held = score_preds(heldout, temps)
     flips = [int(np.argmax(a["logits"]) != np.argmax(b["logits"])) for a, b in zip(dev_a, dev_b)]
-    ms = [p.get("ms", float("nan")) for p in dev_a]
+    ms = [p["ms"] for p in dev_a if not math.isnan(p.get("ms", float("nan")))]
     return {
         "dev_selection": dev["selection"], "dev_se": dev["selection_se"], "dev_acc": dev["accuracy"],
         "dev_brier": dev["brier"], "dev_ece": dev["ece"],

@@ -71,6 +71,7 @@ LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln
           "tierB-2b-ln16-s1": "2B · LN@16 + LoRA, seed 1", "tierB-2b-ln16-s1-tta": "2B · seed 1, TTA2",
           "tierB-2b-half-depth": "2B · read layer 12 (half depth)", "tierB-2b-half-depth-tta": "2B · half depth, TTA2",
           "2ep8k-tta4": "2B · 8k, 2 epochs, TTA4", "2ep8k-tta8": "2B · 8k, 2 epochs, TTA8", "10k2ep-tta4": "2B · 10k, 2 epochs, TTA4", "10k2ep-tta8": "2B · 10k, 2 epochs, TTA8",
+          "tierB-2b-hybrid-2ep": "2B · hybrid read-out (pointer + letter logits)", "tierB-2b-hybrid-2ep-tta2": "2B · hybrid, TTA2", "tierB-2b-hybrid-2ep-tta4": "2B · hybrid, TTA4",
           "ens-2ep8k+10k-tta2": "2B ensemble of 2, TTA2", "ens-2ep8k+10k-tta4": "2B ensemble of 2, TTA4", "ens-3-tta2": "2B ensemble of 3, TTA2", "ens-3-tta4": "2B ensemble of 3, TTA4"}
 
 

@@ -1,8 +1,10 @@
 """CPU tests for the pure parts of train.py."""
+import numpy as np
 import torch
 
 import prepare as P
 import train
+from tests.test_data import FakeTok, _record
 
 
 def test_gather_readout_picks_decide_and_option_positions_per_layer():
@@ -40,3 +42,78 @@ def test_split_plan_defaults_and_final_retrain_mode():
     assert train.split_plan("train", "dev") == (["train"], "dev", ["heldout"])
     tr, calib, report = train.split_plan("train,dev", "heldout")
     assert tr == ["train", "dev"] and calib == "heldout" and report == []
+
+
+# ---- option-shuffle consistency loss (--consistency W) -------------------------------
+def _presented(canon, perm):
+    """Logits as the head emits them when presented position j shows canonical option perm[j]."""
+    return torch.tensor([[canon[i][j] for j in p] for i, p in enumerate(perm)], dtype=torch.float32)
+
+
+def test_consistency_loss_is_zero_for_same_distribution_under_different_perms():
+    canon = [[1.0, 2.0, 3.0], [0.5, -1.0, 2.0]]
+    perm1, perm2 = [[0, 1, 2], [2, 0, 1]], [[2, 0, 1], [1, 2, 0]]
+    z1, z2 = _presented(canon, perm1), _presented(canon, perm2)
+    mask = torch.ones(2, 3, dtype=torch.bool)
+    loss = train.consistency_loss(z1, perm1, z2, perm2, mask, mask)
+    assert loss.shape == () and abs(loss.item()) < 1e-6
+
+
+def test_consistency_loss_is_positive_and_symmetric_when_distributions_differ():
+    perm1, perm2 = [[0, 1, 2]], [[1, 2, 0]]
+    z1 = _presented([[1.0, 2.0, 3.0]], perm1)
+    z2 = _presented([[3.0, 2.0, 1.0]], perm2)
+    mask = torch.ones(1, 3, dtype=torch.bool)
+    a = train.consistency_loss(z1, perm1, z2, perm2, mask, mask)
+    b = train.consistency_loss(z2, perm2, z1, perm1, mask, mask)
+    assert a.item() > 0.1
+    assert abs(a.item() - b.item()) < 1e-6
+    # it is the symmetric KL between the two canonical softmaxes
+    p1, p2 = torch.softmax(torch.tensor([1.0, 2.0, 3.0]), 0), torch.softmax(torch.tensor([3.0, 2.0, 1.0]), 0)
+    ref = 0.5 * ((p1 * (p1.log() - p2.log())).sum() + (p2 * (p2.log() - p1.log())).sum())
+    assert abs(a.item() - ref.item()) < 1e-5
+
+
+def test_consistency_loss_ignores_masked_options_and_different_K():
+    # row 0 has 2 options, row 1 has 3; batch 1 is padded to K=4 with garbage in the masked slots,
+    # batch 2 is padded to K=3 — the result must equal the unpadded computation (zero here)
+    canon = [[1.0, 2.0], [0.0, 1.0, -1.0]]
+    perm1, perm2 = [[1, 0], [2, 1, 0]], [[0, 1], [1, 0, 2]]
+    z1 = torch.full((2, 4), 50.0)
+    z1[0, :2] = torch.tensor([canon[0][j] for j in perm1[0]])
+    z1[1, :3] = torch.tensor([canon[1][j] for j in perm1[1]])
+    z2 = torch.full((2, 3), -7.0)
+    z2[0, :2] = torch.tensor([canon[0][j] for j in perm2[0]])
+    z2[1, :3] = torch.tensor([canon[1][j] for j in perm2[1]])
+    m1 = torch.tensor([[True, True, False, False], [True, True, True, False]])
+    m2 = torch.tensor([[True, True, False], [True, True, True]])
+    loss = train.consistency_loss(z1, perm1, z2, perm2, m1, m2)
+    assert torch.isfinite(loss) and abs(loss.item()) < 1e-6
+    # a real difference confined to the valid options is still seen, and gradients flow to the logits
+    z2 = z2.clone().requires_grad_(True)
+    with torch.no_grad():
+        z2[1, 0] += 2.0
+    loss = train.consistency_loss(z1, perm1, z2, perm2, m1, m2)
+    assert loss.item() > 0.05
+    loss.backward()
+    assert torch.isfinite(z2.grad).all() and z2.grad[0, 2].item() == 0.0   # masked slot gets no gradient
+
+
+def test_reshuffled_batch_gives_same_rows_with_a_different_option_perm():
+    rows = P.flatten([_record("r1", "yelp", state="a b c"), _record("r2", "yelp", state="d e")])
+    rows_by_id = {r["id"]: r for r in rows}
+    tok = FakeTok()
+    rng = np.random.default_rng(0)
+    (b1,) = list(P.batches(tok, rows, len(rows), shuffle_options=True, rng=rng, device="cpu", shuffle_rows=True))
+    b2 = train.reshuffled_batch(tok, b1, rows_by_id, rng, device="cpu", markers=P.QWEN_MARKERS)
+    assert b2["id"] == b1["id"] and b2["qtype"] == b1["qtype"] and b2["n_options"] == b1["n_options"]
+    # the label follows the options: both batches point at the same canonical option
+    for p1, p2, l1, l2 in zip(b1["perm"], b2["perm"], b1["label"].tolist(), b2["label"].tolist()):
+        assert p1[l1] == p2[l2]
+    choice = [i for i, q in enumerate(b1["qtype"]) if q == "choice"]
+    assert any(b1["perm"][i] != b2["perm"][i] for i in choice)
+    # noul / score keep their meaningful order in both
+    for i, q in enumerate(b1["qtype"]):
+        if q != "choice":
+            assert b1["perm"][i] == b2["perm"][i] == list(range(b1["n_options"][i]))
+    assert b2["ids"].shape[0] == b1["ids"].shape[0] and b2["opt_mask"].shape == b1["opt_mask"].shape

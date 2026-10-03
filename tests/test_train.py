@@ -20,3 +20,10 @@ def test_gather_readout_picks_decide_and_option_positions_per_layer():
         assert h_ans[0, li, 0].item() == l * 100 + 8 and h_ans[1, li, 0].item() == l * 100 + 5
         assert h_opts[0, li, 1, 0].item() == l * 100 + 4 and h_opts[1, li, 0, 0].item() == l * 100 + 1
         assert h_opts[1, li, 2, 0].item() == 0.0          # masked option zeroed
+
+
+def test_head_configs_record_the_layer_each_depth_head_reads():
+    cfgs = train.head_configs(n_layers=4, depth_heads=True)
+    assert [c["layer"] for c in cfgs] == [0, 1, 2, 3]
+    single = train.head_configs(n_layers=4, depth_heads=False)
+    assert len(single) == 1 and single[0] == dict(train.head_mod.HEAD_CONFIG)

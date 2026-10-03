@@ -157,3 +157,14 @@ def test_batches_use_the_torso_markers():
     (b,) = list(P.batches(LfmTok(), rows, 1, shuffle_options=False, device="cpu", markers=markers))
     assert b["ids"][0, b["decide_pos"][0]].item() == 5
     assert all(b["ids"][0, p].item() == 9 for p in b["opt_pos"][0])
+
+
+def test_encode_truncates_long_instructions_so_options_keep_their_text():
+    rec = _record("r1", "yelp", state="s")
+    rec["questions"]["q_choice"]["instructions"] = "w " * 5000
+    row = P.flatten([rec])[0]
+    enc = P.encode_row(FakeTok(), row, P.QWEN_MARKERS, shuffle=False)
+    assert len(enc["ids"]) <= P.MAX_ROW_TOKENS
+    assert enc["instr_tokens"] == P.MAX_INSTR_TOKENS
+    # each option still has its own text (not capped to 1 token)
+    assert enc["opt_pos"][1] - enc["opt_pos"][0] > 2

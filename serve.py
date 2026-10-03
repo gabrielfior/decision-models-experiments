@@ -77,7 +77,12 @@ class Decider:
             head_path = head_path or run_dir / "head.pt"
             self.temps.update(cfg.get("temps", {}))
         self.model.eval()
-        self.head = head_mod.build_head(d, len(self.taps), head_config_from_run(cfg.get("head"))).to(device)
+        head_cfg = cfg.get("head")
+        if head_path is not None and run_dir is None and Path(head_path).with_name("head.json").exists():
+            side = json.loads(Path(head_path).with_name("head.json").read_text())   # written by prepare.py tier-a --save
+            head_cfg = side.get("head", head_cfg)
+            self.temps.update(side.get("temps", {}))
+        self.head = head_mod.build_head(d, len(self.taps), head_config_from_run(head_cfg)).to(device)
         if head_path is not None:
             self.head.load_state_dict(torch.load(head_path, map_location=device))
         self.head.eval()

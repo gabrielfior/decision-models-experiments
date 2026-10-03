@@ -50,6 +50,14 @@ DEPTH_HEADS = False           # True = laddered heads at every TAP_LAYER, summed
 # --------------------------------------------------------------------------------------
 
 
+def head_configs(n_layers: int, depth_heads: bool) -> list[dict]:
+    """The exact config of every head this run trains: one per tap for laddered heads, else one.
+    Saved to config.json so serve.py rebuilds the head that was trained, not the current default."""
+    if depth_heads:
+        return [{**head_mod.HEAD_CONFIG, "layer": i} for i in range(n_layers)]
+    return [dict(head_mod.HEAD_CONFIG)]
+
+
 def gather_readout(hidden_states, decide_pos, opt_pos, opt_mask, taps=P.TAP_LAYERS):
     """From the torso's per-layer states pick the vectors the head reads.
 
@@ -71,11 +79,10 @@ def gather_readout(hidden_states, decide_pos, opt_pos, opt_mask, taps=P.TAP_LAYE
 def forward_logits(torso, heads, batch, taps=P.TAP_LAYERS):
     out = torso(input_ids=batch["ids"], attention_mask=batch["attn"], output_hidden_states=True)
     h_ans, h_opts = gather_readout(out.hidden_states, batch["decide_pos"], batch["opt_pos"], batch["opt_mask"], taps)
-    h_ans, h_opts = h_ans.float(), h_opts.float()      # head parameters are fp32; torso states may be bf16
-    if DEPTH_HEADS:
-        # one head per depth; each sees only its own layer (set via cfg layer index)
+    h_ans, h_opts = h_ans.float(), h_opts.float()
+    # The head runs in fp32 in both training and eval (the torso may be under bf16 autocast).
+    with torch.autocast(device_type=h_ans.device.type, enabled=False):
         return [h(h_ans, h_opts, batch["opt_mask"]) for h in heads]
-    return [heads[0](h_ans, h_opts, batch["opt_mask"])]
 
 
 def main(argv=None):
@@ -123,11 +130,12 @@ def main(argv=None):
         torso.enable_input_require_grads()
 
     n_layers = len(taps)
-    if DEPTH_HEADS:
-        heads = torch.nn.ModuleList([head_mod.build_head(d_model, n_layers, {"layer": i}) for i in range(n_layers)])
-    else:
-        heads = torch.nn.ModuleList([head_mod.build_head(d_model, n_layers)])
-    heads.to(device)
+    head_cfgs = head_configs(n_layers, DEPTH_HEADS)
+    heads = torch.nn.ModuleList([head_mod.build_head(d_model, n_layers, c) for c in head_cfgs]).to(device)
+    # from_pretrained leaves the model in eval mode and peft keeps it there: without this, LoRA dropout
+    # is a no-op and HF gradient checkpointing (which checks self.training) never activates.
+    torso.train()
+    heads.train()
 
     train_rows = P.load_split("train")[: args.max_rows]
     dev_rows = P.load_split("dev")
@@ -139,7 +147,7 @@ def main(argv=None):
         weight_decay=WEIGHT_DECAY,
     )
     accum = max(1, BATCH // MICRO_BATCH)
-    steps = args.epochs * math.ceil(len(train_rows) / (MICRO_BATCH * accum))
+    steps = args.epochs * math.ceil(math.ceil(len(train_rows) / MICRO_BATCH) / accum)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=[LR, HEAD_LR], total_steps=steps, pct_start=WARMUP_FRAC)
 
     rng = np.random.default_rng(args.seed)   # numpy: encode_row shuffles options with it
@@ -161,6 +169,12 @@ def main(argv=None):
             step += 1
             if step % 50 == 0:
                 print(f"step {step}/{steps} loss {loss.item() * accum:.4f} {time.time() - t0:.0f}s", flush=True)
+        # a leftover partial accumulation at the end of an epoch is applied, not carried into the next epoch
+        if any(p.grad is not None for p in heads.parameters()):
+            torch.nn.utils.clip_grad_norm_([*lora_params, *heads.parameters()], GRAD_CLIP)
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+            step += 1
     train_s = time.time() - t0
 
     # ---- evaluation: frozen harness, two option orders, per-type temperature on dev ------
@@ -175,13 +189,18 @@ def main(argv=None):
     dev_b = predict(dev_rows, order="reversed")
     temps = P.fit_temperature_by_type(dev_a)
     report = P.evaluate(dev_a, dev_b, predict(heldout_rows, order="identity"), temps)
-    report.update(note=args.note, tier="B", seeds=1, train_s=train_s, torso=args.torso, run_dir=str(run_dir))
+    report.update(note=args.note, tier="B", seeds=1, train_s=train_s, torso=args.torso, run_dir=str(run_dir),
+                  per_seed=[report["dev_selection"]])
+    # Tier B gate: same rule as Tier A, against the latest kept Tier B row (single seed -> dev SE binds).
+    base = P.read_baseline(tier="B")
+    report["baseline"] = base
+    report["kept"] = True if base is None else P.keep(base, report["per_seed"], report["dev_se"])
     P.append_results(report)
     torso.save_pretrained(run_dir / "lora")
     torch.save(final_head.state_dict(), run_dir / "head.pt")
     (run_dir / "config.json").write_text(json.dumps({"lora": LORA, "lr": LR, "head_lr": HEAD_LR,
                                                        "epochs": args.epochs, "batch": BATCH, "micro_batch": MICRO_BATCH,
-                                                       "head": head_mod.HEAD_CONFIG, "temps": temps, "torso": args.torso, "tap_layers": list(taps),
+                                                       "head": head_cfgs[-1], "heads": head_cfgs, "temps": temps, "torso": args.torso, "tap_layers": list(taps),
                                                        "report": report}, indent=2, default=str))
     print(json.dumps({k: v for k, v in report.items() if not isinstance(v, dict)}, indent=2, default=str))
 

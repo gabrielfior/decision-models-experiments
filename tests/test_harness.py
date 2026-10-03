@@ -1,5 +1,7 @@
 """Tests for the frozen training/eval harness in prepare.py (sections 5–6), CPU only."""
 import csv
+import json
+import pytest
 
 import numpy as np
 import torch
@@ -121,3 +123,35 @@ def test_read_baseline_can_pin_a_kept_row_by_note_substring(tmp_path):
     assert P.read_baseline(path) == [0.46, 0.46, 0.46]
     assert P.read_baseline(path, match="LN pointer") == [0.42, 0.45, 0.44]
     assert P.read_baseline(path, match="nope") is None
+
+
+def test_ungated_rows_do_not_become_the_baseline_once_a_kept_row_exists(tmp_path):
+    for name, n in (("train", 300), ("dev", 150), ("heldout", 60)):
+        _synthetic_cache(tmp_path / f"{name}.npz", n, seed=n)
+    import head as head_mod
+    p = tmp_path / "r.tsv"
+    first = P.tier_a(head_mod, cache_dir=tmp_path, seeds=(0,), epochs=5, note="first", results_path=p, baseline=None)
+    assert first["kept"] is True                                   # the very first row anchors the file
+    explore = P.tier_a(head_mod, cache_dir=tmp_path, seeds=(0,), epochs=1, note="exploratory", results_path=p, baseline=None)
+    assert explore["kept"] == "ungated"
+    assert P.read_baseline(p) == pytest.approx(first["per_seed"], abs=1e-4)   # still the first row, not the exploratory one
+
+
+def test_tier_a_saves_the_best_head_with_its_config(tmp_path):
+    for name, n in (("train", 200), ("dev", 100), ("heldout", 40)):
+        _synthetic_cache(tmp_path / f"{name}.npz", n, seed=n)
+    import head as head_mod
+    rep = P.tier_a(head_mod, cache_dir=tmp_path, seeds=(0, 1), epochs=3, note="save me", results_path=tmp_path / "r.tsv",
+                   baseline=None, save_dir=tmp_path / "out")
+    assert (tmp_path / "out" / "head.pt").exists()
+    cfg = json.loads((tmp_path / "out" / "head.json").read_text())
+    assert cfg["head"] == dict(head_mod.HEAD_CONFIG) and cfg["seed"] in (0, 1) and "temps" in cfg
+
+
+def test_code_hash_changes_when_an_editable_file_changes(tmp_path, monkeypatch):
+    a = P.code_hash()
+    monkeypatch.setattr(P, "EDITABLE_FILES", [tmp_path / "x.py"])
+    (tmp_path / "x.py").write_text("one")
+    b = P.code_hash()
+    (tmp_path / "x.py").write_text("two")
+    assert a != b and b != P.code_hash() and len(b) == 8

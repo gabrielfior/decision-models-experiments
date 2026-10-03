@@ -57,7 +57,7 @@ QWEN_MARKERS = {
     "state": "<|fim_prefix|>", "q": "<|fim_middle|>",
     "opt": "<|box_start|>", "opt_end": "<|box_end|>", "decide": "<|fim_suffix|>",
 }
-MAX_STATE_TOKENS, MAX_ROW_TOKENS = 384, 2048
+MAX_STATE_TOKENS, MAX_INSTR_TOKENS, MAX_ROW_TOKENS = 384, 512, 2048
 
 # The torso ladder (plan §3). Each torso brings its own single-token markers (chosen from tokens
 # the tokenizer already has) and the depths tapped for the read-out, at 50/67/83/100% of depth.
@@ -91,6 +91,7 @@ DATA_RAW = ROOT / "data" / "raw"
 DATA_SPLITS = ROOT / "data" / "splits"     # committed: row ids only
 DATA_CACHE = ROOT / "data" / "cache"
 RESULTS_TSV = Path(__import__("os").environ.get("DECIDER_RESULTS", ROOT / "results.tsv"))
+EDITABLE_FILES = [ROOT / "head.py", ROOT / "train.py"]   # hashed into every results row for provenance
 
 
 # ----------------------------------------------------------------------------
@@ -400,7 +401,7 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
     label = None if row["label"] is None else perm.index(row["label"])
 
     state_ids = tok.encode(row["state"], add_special_tokens=False)[:MAX_STATE_TOKENS]
-    instr_ids = tok.encode(row["instructions"], add_special_tokens=False)
+    instr_ids = tok.encode(row["instructions"], add_special_tokens=False)[:MAX_INSTR_TOKENS]
     opt_ids = [tok.encode(option_text(row["qtype"], *row["options"][j]), add_special_tokens=False) for j in perm]
 
     fixed = len(state_ids) + len(instr_ids) + 3 + 2 * n
@@ -417,7 +418,8 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
     ids.append(m["decide"])
     return {
         "ids": ids, "decide_pos": len(ids) - 1, "opt_pos": opt_pos, "label": label,
-        "qtype": row["qtype"], "n_options": n, "perm": perm, "state_tokens": len(state_ids), "id": row["id"],
+        "qtype": row["qtype"], "n_options": n, "perm": perm, "state_tokens": len(state_ids),
+        "instr_tokens": len(instr_ids), "id": row["id"],
     }
 
 
@@ -553,22 +555,35 @@ def evaluate(dev_a: list[dict], dev_b: list[dict], heldout: list[dict], temps: d
 
 
 RESULT_COLUMNS = ["timestamp", "commit", "tier", "note", "seeds", "dev_selection", "dev_se", "dev_acc", "dev_brier",
-                  "dev_ece", "heldout_acc", "heldout_brier", "order_sens", "p50_ms", "kept", "per_seed", "baseline"]
+                  "dev_ece", "heldout_acc", "heldout_brier", "order_sens", "p50_ms", "kept", "per_seed", "baseline", "code_hash"]
 
 
 def git_commit() -> str:
+    """Short HEAD sha, with a -dirty suffix when the working tree differs from it (the usual case
+    while an experiment is being run before its commit)."""
     import subprocess
     try:
-        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, stderr=subprocess.DEVNULL).decode().strip()
+        sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, stderr=subprocess.DEVNULL).decode().strip()
+        dirty = subprocess.run(["git", "diff", "--quiet", "HEAD", "--", "head.py", "train.py"], cwd=ROOT, stderr=subprocess.DEVNULL).returncode != 0
+        return sha + ("-dirty" if dirty else "")
     except Exception:
         return "nogit"
+
+
+def code_hash() -> str:
+    """8 hex chars identifying the exact contents of the editable files that produced a row."""
+    h = hashlib.sha1()
+    for f in EDITABLE_FILES:
+        h.update(Path(f).read_bytes() if Path(f).exists() else b"")
+    return h.hexdigest()[:8]
 
 
 def append_results(rep: dict, path: Path = RESULTS_TSV, commit: str | None = None) -> None:
     import time
     path = Path(path)
     import os
-    row = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "commit": commit or os.environ.get("DECIDER_COMMIT") or git_commit(), **rep}
+    row = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "commit": commit or os.environ.get("DECIDER_COMMIT") or git_commit(),
+           "code_hash": code_hash(), **rep}
     header = not path.exists() or path.stat().st_size == 0
     with open(path, "a") as f:
         if header:
@@ -703,7 +718,8 @@ def _bucketed_indices(n_options: np.ndarray, batch_size: int, rng, shuffle: bool
 
 def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-Base", seeds=tuple(range(N_SEEDS)),
            epochs: int = 20, batch_size: int = 128, lr: float = 1e-3, weight_decay: float = 0.01, note: str = "",
-           results_path: Path = RESULTS_TSV, baseline="auto", device: str = "cpu", baseline_match: str | None = None) -> dict:
+           results_path: Path = RESULTS_TSV, baseline="auto", device: str = "cpu", baseline_match: str | None = None,
+           save_dir: Path | None = None) -> dict:
     """Train head_mod.build_head on the cached read-out vectors, one run per seed, and gate it.
 
     Returns the aggregated report (means over seeds) with `kept` decided by keep() against the
@@ -743,6 +759,7 @@ def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-B
         dev_a, dev_b, held_p = predict(dev, "identity"), predict(dev, "reversed"), predict(held, "identity")
         temps = fit_temperature_by_type(dev_a)
         reports.append(evaluate(dev_a, dev_b, held_p, temps))
+        reports[-1]["seed"], reports[-1]["state_dict"] = seed, {k: v.detach().cpu().clone() for k, v in head.state_dict().items()}
 
     agg = {k: float(np.mean([r[k] for r in reports])) for k in ("dev_selection", "dev_se", "dev_acc", "dev_brier", "dev_ece", "heldout_acc", "heldout_brier", "order_sens")}
     agg.update(p50_ms=float("nan"), tier="A", note=note, seeds=len(reports), per_seed=[r["dev_selection"] for r in reports],
@@ -751,9 +768,22 @@ def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-B
     if isinstance(base, (int, float)):
         base = [float(base)]
     agg["baseline"] = base
-    agg["kept"] = True if base is None else keep(base, agg["per_seed"], agg["dev_se"])
+    if base is not None:
+        agg["kept"] = keep(base, agg["per_seed"], agg["dev_se"])
+    else:
+        # Ungated run: it anchors the file only if nothing kept exists yet; otherwise it is recorded
+        # as "ungated" so read_baseline() never adopts an exploratory row as the reference.
+        agg["kept"] = True if read_baseline(results_path) is None else "ungated"
     agg["noise_floor"] = None if base is None else noise_floor(base, agg["per_seed"], agg["dev_se"])
     append_results(agg, path=results_path)
+    if save_dir is not None:
+        import torch
+        best = max(reports, key=lambda r: r["dev_selection"])
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        torch.save(best["state_dict"], save_dir / "head.pt")
+        (save_dir / "head.json").write_text(json.dumps({"head": dict(head_mod.HEAD_CONFIG), "seed": best["seed"], "temps": best["temps"],
+                                                        "torso": torso, "note": note, "dev_selection": best["dev_selection"]}, indent=1))
     verdict = "KEEP" if agg["kept"] else "DISCARD"
     print(f"{verdict}: dev selection {agg['dev_selection']:.4f} ± {agg['dev_se']:.4f} (per seed {['%.4f' % s for s in agg['per_seed']]})"
           f" vs baseline {base} (noise floor {agg['noise_floor']}); acc {agg['dev_acc']:.3f} brier {agg['dev_brier']:.3f} ece {agg['dev_ece']:.3f}"
@@ -779,6 +809,7 @@ def main(argv=None):
     a.add_argument("--no-gate", action="store_true", help="record without comparing to a baseline")
     a.add_argument("--seeds", default=",".join(str(i) for i in range(N_SEEDS)), help="comma-separated seeds, e.g. 3,4,5 for a replication")
     a.add_argument("--baseline", default=None, help="pin the gate to the latest KEPT row whose note contains this substring")
+    a.add_argument("--save", default=None, help="directory to save the best seed's head.pt + head.json (for serve.py --head)")
     args = ap.parse_args(argv)
     if args.cmd == "cache":
         cache_features(args.torso, splits=tuple(args.splits.split(",")), batch_size=args.batch_size)
@@ -786,7 +817,8 @@ def main(argv=None):
     if args.cmd == "tier-a":
         import head as head_mod
         tier_a(head_mod, torso=args.torso, epochs=args.epochs, note=args.note, baseline=None if args.no_gate else "auto",
-               seeds=tuple(int(x) for x in args.seeds.split(",")), baseline_match=args.baseline)
+               seeds=tuple(int(x) for x in args.seeds.split(",")), baseline_match=args.baseline,
+               save_dir=Path(args.save) if args.save else None)
         return
     if args.cmd == "data":
         raw = download_corpus()

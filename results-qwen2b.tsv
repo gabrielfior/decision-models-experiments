@@ -1,0 +1,5 @@
+timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	heldout_acc	heldout_brier	order_sens	p50_ms	kept	per_seed	baseline	code_hash
+2026-10-03T14:52:04	ab56e61	A	2B depth sweep: LN pointer head, tap index 3 (layer 24)	3	0.4451	0.0115	0.5823	0.4923	0.0299	0.3854	0.7500	0.0000	nan	True	0.4630,0.4197,0.4525		c74ff48a
+2026-10-03T14:52:58	ab56e61	A	2B depth sweep: LN pointer head, tap index 1 (layer 16)	3	0.4283	0.0117	0.5657	0.5027	0.0352	0.3771	0.6993	0.0000	nan	False	0.3785,0.4794,0.4269	0.4630,0.4197,0.4525	c74ff48a
+2026-10-03T14:53:51	5841d1c	A	2B depth sweep: LN pointer head, tap index 0 (layer 12)	3	0.4545	0.0118	0.5940	0.4846	0.0393	0.4492	0.6546	0.0000	nan	False	0.4265,0.4838,0.4533	0.4630,0.4197,0.4525	c74ff48a
+2026-10-03T14:54:43	5841d1c	A	2B depth sweep: LN pointer head, tap index 2 (layer 20)	3	0.3872	0.0113	0.5265	0.5291	0.0581	0.3870	0.7009	0.0000	nan	False	0.4219,0.2951,0.4447	0.4630,0.4197,0.4525	c74ff48a

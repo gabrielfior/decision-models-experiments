@@ -13,4 +13,5 @@ jev() { local name=$1; scripts/jevbench.sh "$name" --torso $T --run "runs/$name"
 run tierB-2b-ln16-2ep  --seed 0 --epochs 2 --note "2B: LN16 head + LoRA r16, 2 epochs";                                              jev tierB-2b-ln16-2ep
 run tierB-2b-xopt-1ep  --seed 0 --head-cfg '{"name":"cross_option","residual_pointer":true}' --note "2B: cross-option+residual head + LoRA r16, 1 epoch"; jev tierB-2b-xopt-1ep
 run tierB-2b-ln16-s1   --seed 1 --note "2B: LN16 head + LoRA r16, 1 epoch, seed 1";                                                   jev tierB-2b-ln16-s1
+run tierB-2b-half-depth --seed 0 --head-cfg '{"layer":0}' --note "2B half-depth: LN head reads layer 12 (tap 0) + LoRA r16, 1 epoch";  jev tierB-2b-half-depth
 echo "=== batch done $(date -u +%FT%TZ)"

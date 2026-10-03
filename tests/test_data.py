@@ -177,3 +177,9 @@ def test_torso_config_carries_lora_target_modules_per_architecture():
     assert set(l) == {"q_proj", "k_proj", "v_proj", "out_proj", "in_proj", "w1", "w2", "w3"}
     m = P.torso_config("answerdotai/ModernBERT-large")["lora_targets"]
     assert set(m) == {"Wqkv", "Wo", "Wi"}
+
+
+def test_qwen_2b_shares_the_qwen_layout_for_the_scaling_check():
+    c = P.torso_config("Qwen/Qwen3.5-2B-Base")
+    assert c["markers"] == P.QWEN_MARKERS and c["tap_layers"] == (12, 16, 20, 24) and c["n_layers"] == 24
+    assert c["lora_targets"] == P.torso_config("Qwen/Qwen3.5-0.8B-Base")["lora_targets"]

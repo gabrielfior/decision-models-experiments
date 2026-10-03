@@ -66,6 +66,10 @@ TORSOS = {
                                # Kev's targets: attention, MLP and the GatedDeltaNet projections
                                "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                                                 "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]},
+    # Scaling check only (plan §3): same family and layout, 24 layers at d = 2048 (18 linear + 6 full attention).
+    "Qwen/Qwen3.5-2B-Base": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
+                             "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+                                              "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]},
     # LFM2.5: 14 layers (8 short-conv + 6 attention), all causal. FIM tokens saw pretraining;
     # the tool-list tokens are single added tokens with meaningful "list of items" semantics.
     "LiquidAI/LFM2.5-230M-Base": {"markers": {"state": "<|fim_pre|>", "q": "<|fim_mid|>", "opt": "<|tool_list_start|>",

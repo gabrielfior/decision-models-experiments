@@ -69,6 +69,7 @@ def gather_readout(hidden_states, decide_pos, opt_pos, opt_mask):
 def forward_logits(torso, heads, batch):
     out = torso(input_ids=batch["ids"], attention_mask=batch["attn"], output_hidden_states=True)
     h_ans, h_opts = gather_readout(out.hidden_states, batch["decide_pos"], batch["opt_pos"], batch["opt_mask"])
+    h_ans, h_opts = h_ans.float(), h_opts.float()      # head parameters are fp32; torso states may be bf16
     if DEPTH_HEADS:
         # one head per depth; each sees only its own layer (set via cfg layer index)
         return [h(h_ans, h_opts, batch["opt_mask"]) for h in heads]

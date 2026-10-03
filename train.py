@@ -14,6 +14,10 @@ reads the perturbed evolution's state at <decide> and at each </opt> and scores.
 Baseline hyperparameters are Kev's 0.8B recipe (runs/q35-08b/02-trial-2/provenance.json)
 with Strands' separate head learning rate, except that we run 1 epoch over 8k rows
 instead of Kev's 2 epochs over 12.5k, for cost.
+
+Distillation (--kl-teacher data/teacher/<name>.jsonl --kl-weight a): scripts/teacher.py writes a teacher's option
+probabilities per row id in canonical order; the loss becomes (1 - a) CE + a KL(teacher || student) over the valid
+options, with the teacher vector permuted into the presented option order. Rows the file misses stay on CE.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 import head as head_mod
 import prepare as P
@@ -99,6 +104,57 @@ def forward_logits(torso, heads, batch, taps=P.TAP_LAYERS):
         return [h(h_ans, h_opts, batch["opt_mask"]) for h in heads]
 
 
+# ---- teacher distillation (--kl-teacher; the file comes from scripts/teacher.py) -------------
+def load_teacher(path) -> dict[str, list[float]]:
+    """data/teacher/<name>.jsonl ({"id", "probs"} per line; probs in CANONICAL option order) -> {id: probs}."""
+    out = {}
+    with open(path) as f:
+        for line in f:
+            if line.strip():
+                r = json.loads(line)
+                out[r["id"]] = [float(x) for x in r["probs"]]
+    return out
+
+
+def teacher_batch(teacher: dict, ids: list[str], perms: list[list[int]], K: int, device: str = "cpu"):
+    """Teacher probabilities in PRESENTED order, padded to K: presented position j shows canonical option perm[j],
+    so t_presented[j] = t_canonical[perm[j]].  Returns ([B, K] float, [B] bool: row found in the teacher file)."""
+    t = torch.zeros(len(ids), K)
+    has = torch.zeros(len(ids), dtype=torch.bool)
+    for i, (rid, perm) in enumerate(zip(ids, perms)):
+        p = teacher.get(rid)
+        if p is None or len(p) != len(perm):
+            continue
+        t[i, : len(perm)] = torch.tensor([p[j] for j in perm], dtype=torch.float32)
+        has[i] = True
+    return t.to(device), has.to(device)
+
+
+def kl_to_teacher(logits: torch.Tensor, teacher_presented: torch.Tensor, opt_mask: torch.Tensor) -> torch.Tensor:
+    """KL(teacher || student) over the valid options, mean over rows (F.kl_div batchmean).
+    The student distribution is softmax over the valid options only; padded options carry no teacher mass and no term."""
+    mask = opt_mask.bool()
+    log_s = F.log_softmax(logits.float().masked_fill(~mask, -1e4), dim=-1)      # finite fill: 0 * (-1e4) stays 0 below
+    t = teacher_presented.float() * mask
+    per = F.kl_div(log_s, t, reduction="none") * mask                             # t * (log t - log s), 0 where t = 0
+    return per.sum() / logits.shape[0]
+
+
+def distill_loss(head, logits, labels, teacher_presented, has_teacher, opt_mask, alpha: float) -> torch.Tensor:
+    """(1 - alpha) * head.loss + alpha * KL(teacher || student) on rows the teacher file covers; the head's own loss on
+    the others; combined as a mean over rows (exact when head.loss is a per-row mean, as CE is)."""
+    has = has_teacher.bool()
+    B, n_t = logits.shape[0], int(has.sum())
+    if n_t == 0 or alpha <= 0:
+        return head.loss(logits, labels)
+    kl = kl_to_teacher(logits[has], teacher_presented[has], opt_mask[has])
+    l_t = (1 - alpha) * head.loss(logits[has], labels[has]) + alpha * kl
+    if n_t == B:
+        return l_t
+    l_n = head.loss(logits[~has], labels[~has])
+    return (n_t * l_t + (B - n_t) * l_n) / B
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--note", required=True, help="one line: hypothesis for this run")
@@ -114,6 +170,8 @@ def main(argv=None):
     ap.add_argument("--head-cfg", default=None, help='JSON overrides for head.HEAD_CONFIG, e.g. {"name":"cross_option"}')
     ap.add_argument("--train-splits", default="train", help="comma list of splits to train on (final retrain: train,dev)")
     ap.add_argument("--calib-split", default="dev", help="split that fits temperatures and is reported as dev")
+    ap.add_argument("--kl-teacher", default=None, help="data/teacher/<name>.jsonl from scripts/teacher.py: distil from its option distributions")
+    ap.add_argument("--kl-weight", type=float, default=0.5, help="alpha in (1-alpha)*CE + alpha*KL(teacher||student); rows missing from the teacher file use CE")
     args = ap.parse_args(argv)
     apply_head_overrides(args.head_cfg)
     global DEPTH_HEADS, LR
@@ -161,6 +219,11 @@ def main(argv=None):
     dev_rows = P.load_split(calib_split)
     heldout_rows = [r for sname in report_splits for r in P.load_split(sname)]
     print(f"train on {tr_splits} ({len(train_rows)} rows); calibrate/select on {calib_split} ({len(dev_rows)}); report {report_splits} ({len(heldout_rows)})", flush=True)
+    teacher = None
+    if args.kl_teacher:
+        teacher = load_teacher(args.kl_teacher)
+        covered = sum(r["id"] in teacher for r in train_rows)
+        print(f"teacher {args.kl_teacher}: {len(teacher)} rows, covers {covered}/{len(train_rows)} train rows; alpha {args.kl_weight}", flush=True)
 
     lora_params = [p for p in torso.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(
@@ -179,7 +242,12 @@ def main(argv=None):
         for mb, batch in enumerate(P.batches(tok, train_rows, MICRO_BATCH, shuffle_options=True, rng=rng, device=device, markers=markers, shuffle_rows=True)):
             with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=device == "cuda"):
                 logits_per_head = forward_logits(torso, heads, batch, taps)
-                loss = sum(h.loss(z, batch["label"]) for h, z in zip(heads, logits_per_head)) / accum
+                if teacher is None:
+                    loss = sum(h.loss(z, batch["label"]) for h, z in zip(heads, logits_per_head)) / accum
+                else:
+                    t_pres, has_t = teacher_batch(teacher, batch["id"], batch["perm"], batch["opt_mask"].shape[1], device)
+                    loss = sum(distill_loss(h, z, batch["label"], t_pres, has_t, batch["opt_mask"], args.kl_weight)
+                               for h, z in zip(heads, logits_per_head)) / accum
             loss.backward()
             if (mb + 1) % accum:
                 continue
@@ -222,6 +290,7 @@ def main(argv=None):
     (run_dir / "config.json").write_text(json.dumps({"lora": LORA, "lr": LR, "head_lr": HEAD_LR,
                                                        "epochs": args.epochs, "batch": BATCH, "micro_batch": MICRO_BATCH,
                                                        "head": head_cfgs[-1], "heads": head_cfgs, "temps": temps, "torso": args.torso, "tap_layers": list(taps),
+                                                       "kl_teacher": args.kl_teacher, "kl_weight": args.kl_weight if args.kl_teacher else None,
                                                        "report": report}, indent=2, default=str))
     print(json.dumps({k: v for k, v in report.items() if not isinstance(v, dict)}, indent=2, default=str))
 

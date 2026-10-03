@@ -50,7 +50,7 @@ app = modal.App(APP, image=image)
 
 def _guard():
     """Refuse to start GPU work once this month's Modal compute exceeds the cap."""
-    cap = float(os.environ.get("MODAL_BUDGET_USD", "5"))
+    cap = float(os.environ.get("MODAL_BUDGET_USD", "20"))   # raised from 5 on 2026-10-03 evening at the user's request
     spent = float(subprocess.check_output(["python", "compute/modal_budget.py", "--value"]).decode())
     if spent >= cap:
         raise SystemExit(f"Modal compute this month ${spent:.2f} >= cap ${cap:.2f}; move to RunPod")

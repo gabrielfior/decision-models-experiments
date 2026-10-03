@@ -56,3 +56,9 @@ less. ModernBERT's order sensitivity is the highest of all, which fits a bidirec
 every option while reading each one. Neither small torso approaches Kev-0.8B (0.636) with this recipe;
 the 0.8B remains the smallest torso in this ladder that is competitive. LoRA rank 64 on Qwen did not beat
 rank 16 (0.6135 vs 0.6195 selection, held-out 0.582 vs 0.611).
+
+**Epochs.** LayerNorm@16 head + LoRA r16, Qwen3.5-0.8B, 8k rows: 1 epoch → dev 0.641 / held-out 0.605 /
+order sens 2.2% / JevBench 152; 2 epochs → dev 0.641 / held-out 0.658 / order sens 1.4% / JevBench 152
+(Brier 0.446 → 0.446, ECE 0.094 → 0.087). The second epoch improves generalisation to held-out task
+families and stability, not JevBench accuracy. Laddered depth heads (0.626) and LoRA rank 64 (0.614) did not
+beat the single head at rank 16 (0.620–0.641 across seeds).

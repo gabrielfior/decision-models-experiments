@@ -62,3 +62,8 @@ order sens 2.2% / JevBench 152; 2 epochs → dev 0.641 / held-out 0.658 / order 
 (Brier 0.446 → 0.446, ECE 0.094 → 0.087). The second epoch improves generalisation to held-out task
 families and stability, not JevBench accuracy. Laddered depth heads (0.626) and LoRA rank 64 (0.614) did not
 beat the single head at rank 16 (0.620–0.641 across seeds).
+
+**Scaling check (plan step 8).** Qwen3.5-2B-Base + LoRA r16 + LayerNorm@16 head, 1 epoch, 8k rows, 23 min on a 3090:
+dev acc 0.761 / sel 0.666 / Brier 0.316 / held-out 0.724 / order sens 1.05%; JevBench 162/231 = 0.701. The
+0.8B with the same recipe: 0.743 / 0.641 / 0.344 / 0.605 / 2.2%; JevBench 152. The torso step is worth +0.12
+held-out accuracy and +10 JevBench decisions; Strands' 2B (0.723, 123k rows) is 5 decisions away.

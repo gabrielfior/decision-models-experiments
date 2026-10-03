@@ -125,6 +125,12 @@ def pull(remote: str, local: str = "runs/pod"):
     print(f"pulled {remote} -> {dest}")
 
 
+def resume():
+    """Restart a STOPPED pod on the same machine with its volume intact."""
+    d = gql(f'mutation {{ podResume(input: {{ podId: "{pod_id()}", gpuCount: 1 }}) {{ id desiredStatus costPerHr }} }}')["podResume"]
+    print(f"resumed {d['id']}: {d['desiredStatus']} at ${d.get('costPerHr')}/hr")
+
+
 def stop():
     print(gql(f'mutation {{ podStop(input: {{ podId: "{pod_id()}" }}) {{ id desiredStatus }} }}'))
 
@@ -138,4 +144,4 @@ def terminate():
 if __name__ == "__main__":
     cmd, *rest = sys.argv[1:] or ["status"]
     {"create": create, "status": status, "ssh": lambda: ssh(rest), "sync": lambda: sync("--no-cache" not in rest),
-     "pull": lambda: pull(*rest), "stop": stop, "terminate": terminate}[cmd]()
+     "pull": lambda: pull(*rest), "resume": resume, "stop": stop, "terminate": terminate}[cmd]()

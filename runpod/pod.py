@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -35,9 +36,12 @@ TEMPLATE = json.loads((ROOT / "runpod" / "template.json").read_text())
 def gql(query: str) -> dict:
     key = os.environ.get("RUNPOD_API_KEY") or sys.exit("RUNPOD_API_KEY not set (set -a; source .env; set +a)")
     req = urllib.request.Request(f"https://api.runpod.io/graphql?api_key={key}", data=json.dumps({"query": query}).encode(),
-                                 headers={"content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
-        out = json.load(r)
+                                 headers={"content-type": "application/json", "user-agent": "curl/8.0 decider-autoresearch"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            out = json.load(r)
+    except urllib.error.HTTPError as e:
+        sys.exit(f"RunPod API HTTP {e.code}: {e.read().decode()[:500]}")
     if out.get("errors"):
         sys.exit(f"RunPod API error: {out['errors']}")
     return out["data"]

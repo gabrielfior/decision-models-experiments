@@ -1,1 +1,2 @@
 timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	heldout_acc	heldout_brier	order_sens	p50_ms	kept
+2026-10-03T10:55:16	7b38e1a	A	baseline: Kev pointer head (width 256, layer 24) on frozen Qwen3.5-0.8B cache	3	0.2874	0.0114	0.4633	0.6268	0.0631	0.2386	0.7889	0.0000	nan	True

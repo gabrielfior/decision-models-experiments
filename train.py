@@ -48,14 +48,14 @@ DEPTH_HEADS = False           # True = laddered heads at every TAP_LAYER, summed
 # --------------------------------------------------------------------------------------
 
 
-def gather_readout(hidden_states, decide_pos, opt_pos, opt_mask):
+def gather_readout(hidden_states, decide_pos, opt_pos, opt_mask, taps=P.TAP_LAYERS):
     """From the torso's per-layer states pick the vectors the head reads.
 
     hidden_states: tuple of [B, T, d] (one per layer, index 0 = embeddings)
     decide_pos: [B] position of <decide>;  opt_pos: [B, K] position of each </opt>
     returns h_ans [B, L, d], h_opts [B, L, K, d] for L = len(P.TAP_LAYERS)
     """
-    hs = torch.stack([hidden_states[l] for l in P.TAP_LAYERS], dim=1)   # [B, L, T, d]
+    hs = torch.stack([hidden_states[l] for l in taps], dim=1)           # [B, L, T, d]
     B, L, T, d = hs.shape
     bi = torch.arange(B, device=hs.device)
     h_ans = hs[bi, :, decide_pos]                                        # [B, L, d]
@@ -66,9 +66,9 @@ def gather_readout(hidden_states, decide_pos, opt_pos, opt_mask):
     return h_ans, h_opts
 
 
-def forward_logits(torso, heads, batch):
+def forward_logits(torso, heads, batch, taps=P.TAP_LAYERS):
     out = torso(input_ids=batch["ids"], attention_mask=batch["attn"], output_hidden_states=True)
-    h_ans, h_opts = gather_readout(out.hidden_states, batch["decide_pos"], batch["opt_pos"], batch["opt_mask"])
+    h_ans, h_opts = gather_readout(out.hidden_states, batch["decide_pos"], batch["opt_pos"], batch["opt_mask"], taps)
     h_ans, h_opts = h_ans.float(), h_opts.float()      # head parameters are fp32; torso states may be bf16
     if DEPTH_HEADS:
         # one head per depth; each sees only its own layer (set via cfg layer index)
@@ -95,6 +95,8 @@ def main(argv=None):
 
     # bf16 weights on GPU (1.5 GB for 0.8B) and gradient checkpointing: activations are recomputed
     # in the backward pass instead of stored, trading ~30% compute for fitting a 24 GB card.
+    tcfg = P.torso_config(args.torso)
+    markers, taps = tcfg["markers"], tcfg["tap_layers"]
     tok, torso, d_model = P.load_torso(args.torso, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device=device)
     for p in torso.parameters():
         p.requires_grad_(False)
@@ -105,7 +107,7 @@ def main(argv=None):
     if device == "cuda":
         torso.enable_input_require_grads()
 
-    n_layers = len(P.TAP_LAYERS)
+    n_layers = len(taps)
     if DEPTH_HEADS:
         heads = torch.nn.ModuleList([head_mod.build_head(d_model, n_layers, {"layer": i}) for i in range(n_layers)])
     else:
@@ -128,9 +130,9 @@ def main(argv=None):
     t0 = time.time()
     step = 0
     for epoch in range(args.epochs):
-        for batch in P.batches(tok, train_rows, BATCH, shuffle_options=True, rng=rng, device=device):
+        for batch in P.batches(tok, train_rows, BATCH, shuffle_options=True, rng=rng, device=device, markers=markers, shuffle_rows=True):
             with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=device == "cuda"):
-                logits_per_head = forward_logits(torso, heads, batch)
+                logits_per_head = forward_logits(torso, heads, batch, taps)
                 loss = sum(h.loss(z, batch["label"]) for h, z in zip(heads, logits_per_head))
             opt.zero_grad(set_to_none=True)
             loss.backward()
@@ -148,7 +150,7 @@ def main(argv=None):
     final_head = heads[-1]
 
     def predict(rows, order):
-        return P.predict_rows(lambda b: forward_logits(torso, [final_head], b)[0], tok, rows, order=order, device=device)
+        return P.predict_rows(lambda b: forward_logits(torso, [final_head], b, taps)[0], tok, rows, order=order, device=device, markers=markers)
 
     dev_a = predict(dev_rows, order="identity")
     dev_b = predict(dev_rows, order="reversed")
@@ -160,7 +162,7 @@ def main(argv=None):
     torch.save(final_head.state_dict(), run_dir / "head.pt")
     (run_dir / "config.json").write_text(json.dumps({"lora": LORA, "lr": LR, "head_lr": HEAD_LR,
                                                        "epochs": args.epochs, "batch": BATCH,
-                                                       "head": head_mod.HEAD_CONFIG, "temps": temps,
+                                                       "head": head_mod.HEAD_CONFIG, "temps": temps, "torso": args.torso, "tap_layers": list(taps),
                                                        "report": report}, indent=2, default=str))
     print(json.dumps({k: v for k, v in report.items() if not isinstance(v, dict)}, indent=2, default=str))
 

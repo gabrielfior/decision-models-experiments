@@ -136,3 +136,24 @@ def test_flatten_renders_dict_instructions_and_list_state_as_text():
     row = P.flatten([rec])[0]
     assert isinstance(row["instructions"], str) and "Which intent?" in row["instructions"] and "Whole message." in row["instructions"]
     assert isinstance(row["state"], str) and "customer" in row["state"]
+
+
+# ---- per-torso layout ------------------------------------------------------------------
+def test_torso_config_gives_markers_and_tap_layers_for_each_ladder_torso():
+    q = P.torso_config("Qwen/Qwen3.5-0.8B-Base")
+    assert q["markers"] == P.QWEN_MARKERS and q["tap_layers"] == (12, 16, 20, 24)
+    l = P.torso_config("LiquidAI/LFM2.5-230M-Base")
+    assert l["tap_layers"] == (7, 9, 12, 14) and l["markers"]["decide"] == "<|fim_suf|>"
+    m = P.torso_config("answerdotai/ModernBERT-large")
+    assert m["tap_layers"] == (14, 19, 23, 28) and m["markers"]["opt_end"] == "[unused3]"
+    assert P.torso_config("Qwen3.5-0.8B-Base") == q          # short name works too
+
+
+def test_batches_use_the_torso_markers():
+    class LfmTok(FakeTok):
+        specials = {"<|fim_pre|>": 3, "<|fim_mid|>": 4, "<|tool_list_start|>": 8, "<|tool_list_end|>": 9, "<|fim_suf|>": 5}
+    rows = [r for r in P.flatten([_record("r1", "yelp")]) if r["qtype"] == "choice"]
+    markers = P.torso_config("LiquidAI/LFM2.5-230M-Base")["markers"]
+    (b,) = list(P.batches(LfmTok(), rows, 1, shuffle_options=False, device="cpu", markers=markers))
+    assert b["ids"][0, b["decide_pos"][0]].item() == 5
+    assert all(b["ids"][0, p].item() == 9 for p in b["opt_pos"][0])

@@ -51,6 +51,8 @@ class Decider:
         import head as head_mod
         import train
         self.device = device
+        tcfg = P.torso_config(torso)
+        self.markers, self.taps = tcfg["markers"], tcfg["tap_layers"]
         self.tok, self.model, d = P.load_torso(torso, dtype=torch.float32 if device == "cpu" else torch.bfloat16, device=device)
         self.temps = {t: 1.0 for t in P.QTYPES}
         cfg = {}
@@ -63,7 +65,7 @@ class Decider:
             head_path = head_path or run_dir / "head.pt"
             self.temps.update(cfg.get("temps", {}))
         self.model.eval()
-        self.head = head_mod.build_head(d, len(P.TAP_LAYERS), cfg.get("head")).to(device)
+        self.head = head_mod.build_head(d, len(self.taps), cfg.get("head")).to(device)
         if head_path is not None:
             self.head.load_state_dict(torch.load(head_path, map_location=device))
         self.head.eval()
@@ -73,12 +75,12 @@ class Decider:
         import torch
         with torch.no_grad():
             out = self.model(input_ids=batch["ids"], attention_mask=batch["attn"], output_hidden_states=True)
-            h_ans, h_opts = self.train.gather_readout(out.hidden_states, batch["decide_pos"], batch["opt_pos"], batch["opt_mask"])
+            h_ans, h_opts = self.train.gather_readout(out.hidden_states, batch["decide_pos"], batch["opt_pos"], batch["opt_mask"], self.taps)
             return self.head(h_ans.float(), h_opts.float(), batch["opt_mask"])
 
     def decide(self, state, question: dict) -> dict:
         row = P.question_to_row(state, question)
-        batch = next(P.batches(self.tok, [row], 1, shuffle_options=False, device=self.device))
+        batch = next(P.batches(self.tok, [row], 1, shuffle_options=False, device=self.device, markers=self.markers))
         z = self.logits(batch)[0, : row["n_options"]].float().cpu().numpy()
         probs = P._softmax(z / self.temps.get(row["qtype"], 1.0))
         return build_answer(row["qtype"], row["options"], probs)

@@ -59,6 +59,33 @@ QWEN_MARKERS = {
 }
 MAX_STATE_TOKENS, MAX_ROW_TOKENS = 384, 2048
 
+# The torso ladder (plan §3). Each torso brings its own single-token markers (chosen from tokens
+# the tokenizer already has) and the depths tapped for the read-out, at 50/67/83/100% of depth.
+TORSOS = {
+    "Qwen/Qwen3.5-0.8B-Base": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24},
+    # LFM2.5: 14 layers (8 short-conv + 6 attention), all causal. FIM tokens saw pretraining;
+    # the tool-list tokens are single added tokens with meaningful "list of items" semantics.
+    "LiquidAI/LFM2.5-230M-Base": {"markers": {"state": "<|fim_pre|>", "q": "<|fim_mid|>", "opt": "<|tool_list_start|>",
+                                               "opt_end": "<|tool_list_end|>", "decide": "<|fim_suf|>"},
+                                  "tap_layers": (7, 9, 12, 14), "n_layers": 14},
+    # ModernBERT: 28 bidirectional layers. [SEP] only ever closed a whole sequence in pretraining,
+    # so dedicated [unusedN] tokens mark the parts; their embeddings are untrained, so the LoRA/
+    # full fine-tune of Tier B has to learn them (Tier A on a frozen torso will be weak here).
+    "answerdotai/ModernBERT-large": {"markers": {"state": "[unused0]", "q": "[unused1]", "opt": "[unused2]",
+                                                 "opt_end": "[unused3]", "decide": "[unused4]"},
+                                     "tap_layers": (14, 19, 23, 28), "n_layers": 28, "bidirectional": True},
+}
+
+
+def torso_config(name: str) -> dict:
+    """Markers and tap layers for a torso, by full Hub id or by its short name."""
+    if name in TORSOS:
+        return TORSOS[name]
+    for k, v in TORSOS.items():
+        if k.split("/")[-1] == name.split("/")[-1]:
+            return v
+    raise KeyError(f"unknown torso {name!r}; add it to prepare.TORSOS")
+
 ROOT = Path(__file__).resolve().parent
 DATA_RAW = ROOT / "data" / "raw"
 DATA_SPLITS = ROOT / "data" / "splits"     # committed: row ids only
@@ -406,7 +433,7 @@ def load_torso(name: str, dtype=None, device: str = "cpu"):
 
 
 def batches(tok, rows: list[dict], batch_size: int, shuffle_options: bool, rng=None, device: str = "cpu",
-            order: str = "identity", shuffle_rows: bool = False):
+            order: str = "identity", shuffle_rows: bool = False, markers: dict = QWEN_MARKERS):
     """Encode rows and yield right-padded tensor batches with the read-out positions."""
     import torch
     idx = list(range(len(rows)))
@@ -414,7 +441,7 @@ def batches(tok, rows: list[dict], batch_size: int, shuffle_options: bool, rng=N
         (rng or np.random.default_rng()).shuffle(idx)
     pad_id = getattr(tok, "pad_token_id", None) or 0
     for start in range(0, len(idx), batch_size):
-        encs = [encode_row(tok, rows[i], shuffle=shuffle_options, rng=rng, order=order) for i in idx[start:start + batch_size]]
+        encs = [encode_row(tok, rows[i], markers, shuffle=shuffle_options, rng=rng, order=order) for i in idx[start:start + batch_size]]
         B, T, K = len(encs), max(len(e["ids"]) for e in encs), max(e["n_options"] for e in encs)
         ids = torch.full((B, T), pad_id, dtype=torch.long)
         attn = torch.zeros((B, T), dtype=torch.long)
@@ -433,7 +460,8 @@ def batches(tok, rows: list[dict], batch_size: int, shuffle_options: bool, rng=N
         }
 
 
-def predict_rows(logit_fn, tok, rows: list[dict], order: str = "identity", device: str = "cpu", batch_size: int = 16) -> list[dict]:
+def predict_rows(logit_fn, tok, rows: list[dict], order: str = "identity", device: str = "cpu", batch_size: int = 16,
+                 markers: dict = QWEN_MARKERS) -> list[dict]:
     """Run `logit_fn(batch) -> [B, K]` over rows; return logits mapped back to CANONICAL option order.
 
     Mapping back lets two runs under different option orders be compared row by row.
@@ -443,7 +471,7 @@ def predict_rows(logit_fn, tok, rows: list[dict], order: str = "identity", devic
     import torch
     preds = []
     with torch.no_grad():
-        for b in batches(tok, rows, batch_size, shuffle_options=False, order=order, device=device):
+        for b in batches(tok, rows, batch_size, shuffle_options=False, order=order, device=device, markers=markers):
             t0 = time.perf_counter()
             z = logit_fn(b).float().cpu().numpy()
             ms = (time.perf_counter() - t0) * 1000 / len(b["id"])
@@ -580,6 +608,8 @@ def cache_features(torso_name: str, splits=("train", "dev", "heldout"), batch_si
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     out_dir = Path(out_dir or cache_dir() / torso_name.split("/")[-1])
     out_dir.mkdir(parents=True, exist_ok=True)
+    cfg = torso_config(torso_name)
+    markers, taps = cfg["markers"], cfg["tap_layers"]
     tok, model, d = load_torso(torso_name, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device=device)
     model.eval()
     for split in splits:
@@ -587,9 +617,9 @@ def cache_features(torso_name: str, splits=("train", "dev", "heldout"), batch_si
         h_ans, h_opts, labels, qtypes, n_opts, ids = [], [], [], [], [], []
         t0 = time.time()
         with torch.no_grad():
-            for bi, b in enumerate(batches(tok, rows, batch_size, shuffle_options=False, device=device)):
+            for bi, b in enumerate(batches(tok, rows, batch_size, shuffle_options=False, device=device, markers=markers)):
                 out = model(input_ids=b["ids"], attention_mask=b["attn"], output_hidden_states=True)
-                hs = torch.stack([out.hidden_states[l] for l in TAP_LAYERS], dim=1)      # [B, L, T, d]
+                hs = torch.stack([out.hidden_states[l] for l in taps], dim=1)            # [B, L, T, d]
                 ar = torch.arange(hs.shape[0], device=device)
                 h_ans.append(hs[ar, :, b["decide_pos"]].to(torch.float16).cpu().numpy())
                 for i, n in enumerate(b["n_options"]):
@@ -600,7 +630,7 @@ def cache_features(torso_name: str, splits=("train", "dev", "heldout"), batch_si
         n_opts = np.array(n_opts)
         np.savez(out_dir / f"{split}.npz", h_ans=np.concatenate(h_ans), h_opts=np.concatenate(h_opts),
                  offsets=np.concatenate([[0], np.cumsum(n_opts)]), labels=np.array(labels), qtypes=np.array(qtypes),
-                 n_options=n_opts, ids=np.array(ids), d_model=d)
+                 n_options=n_opts, ids=np.array(ids), d_model=d, tap_layers=np.array(taps))
         print(f"{split}: wrote {len(ids)} rows in {time.time() - t0:.0f}s -> {out_dir / (split + '.npz')}", flush=True)
 
 

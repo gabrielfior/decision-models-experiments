@@ -145,6 +145,19 @@ def pull(remote: str, local: str = "runs/pod"):
     print(f"pulled {remote} -> {dest}")
 
 
+def push(local: str, remote: str):
+    """rsync a local directory to /workspace/decider/<remote> on the pod (local path may contain ':')."""
+    ip, port = ssh_target()
+    rsh = f"ssh -i {KEY} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p {port}"
+    src = str(Path(local).resolve()).rstrip("/") + "/"
+    subprocess.check_call(["ssh", "-i", str(KEY), "-o", "StrictHostKeyChecking=no", "-o", "UserKnownHostsFile=/dev/null", "-p", str(port),
+                           f"root@{ip}", f"mkdir -p /workspace/decider/{remote}"])
+    rc = subprocess.call(["rsync", "-az", "--stats", "-e", rsh, src, f"root@{ip}:/workspace/decider/{remote.rstrip('/')}/"])
+    if rc not in (0, 23, 24):
+        raise SystemExit(f"rsync failed with code {rc}")
+    print(f"pushed {local} -> {remote}")
+
+
 def resume():
     """Restart a STOPPED pod on the same machine with its volume intact."""
     d = gql(f'mutation {{ podResume(input: {{ podId: "{pod_id()}", gpuCount: 1 }}) {{ id desiredStatus costPerHr }} }}')["podResume"]
@@ -164,4 +177,4 @@ def terminate():
 if __name__ == "__main__":
     cmd, *rest = sys.argv[1:] or ["status"]
     {"create": create, "status": status, "ssh": lambda: ssh(rest), "sync": lambda: sync("--no-cache" not in rest),
-     "pull": lambda: pull(*rest), "resume": resume, "stop": stop, "terminate": terminate}[cmd]()
+     "pull": lambda: pull(*rest), "push": lambda: push(*rest), "resume": resume, "stop": stop, "terminate": terminate}[cmd]()

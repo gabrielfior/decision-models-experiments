@@ -60,22 +60,40 @@ def pod_id() -> str:
     return json.loads(STATE.read_text())["id"]
 
 
+# 24 GB cards in order of price; tried in turn when the community cloud has no 3090 free.
+GPU_FALLBACKS = [("NVIDIA GeForce RTX 3090", "COMMUNITY"), ("NVIDIA RTX A5000", "COMMUNITY"), ("NVIDIA GeForce RTX 4090", "COMMUNITY"),
+                 ("NVIDIA GeForce RTX 3090", "ALL"), ("NVIDIA RTX A5000", "ALL"), ("NVIDIA L4", "ALL"), ("NVIDIA GeForce RTX 4090", "ALL")]
+
+
 def create():
     pub = ensure_key()
     env = {k: v for k, v in TEMPLATE["env"].items() if not v.startswith("<")}
     env["SSH_PUBLIC_KEY"] = pub
     env["PUBLIC_KEY"] = pub          # runpod/* images start sshd from this one
     env_s = ", ".join(f'{{ key: "{k}", value: {json.dumps(v)} }}' for k, v in env.items())
+    last = None
+    for gpu, cloud in GPU_FALLBACKS:
+        try:
+            return _create_one(gpu, cloud, env_s)
+        except SystemExit as e:
+            last = e
+            print(f"  {gpu} ({cloud}): unavailable")
+    raise SystemExit(f"no GPU available in the fallback list; last error: {last}")
+
+
+def _create_one(gpu: str, cloud: str, env_s: str):
     q = f'''mutation {{ podFindAndDeployOnDemand(input: {{
-        cloudType: {TEMPLATE["cloudType"]}, gpuCount: 1, gpuTypeId: {json.dumps(TEMPLATE["gpu"])},
+        cloudType: {cloud}, gpuCount: 1, gpuTypeId: {json.dumps(gpu)},
         name: {json.dumps(TEMPLATE["name"])}, imageName: {json.dumps(TEMPLATE["imageName"])},
         volumeInGb: {TEMPLATE["volumeInGb"]}, containerDiskInGb: {TEMPLATE["containerDiskInGb"]},
         minVcpuCount: 4, minMemoryInGb: 16, volumeMountPath: {json.dumps(TEMPLATE["volumeMountPath"])},
         ports: {json.dumps(TEMPLATE["ports"])}, dockerArgs: "", env: [{env_s}] }}) {{ id imageName machineId costPerHr }} }}'''
     d = gql(q)["podFindAndDeployOnDemand"]
+    d["gpu"], d["cloud"] = gpu, cloud
     STATE.parent.mkdir(parents=True, exist_ok=True)
     STATE.write_text(json.dumps(d, indent=1))
-    print(f"created pod {d['id']} on {d.get('machineId')} at ${d.get('costPerHr')}/hr")
+    print(f"created pod {d['id']} ({gpu}, {cloud}) on {d.get('machineId')} at ${d.get('costPerHr')}/hr")
+    return d
 
 
 def status(quiet=False) -> dict:

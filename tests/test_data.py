@@ -193,3 +193,53 @@ def test_encode_row_cyclic_shift_orders_rotate_choice_options_and_the_label():
     assert enc2["perm"] == [2, 0, 1] and enc2["label"] == 2
     noul = P.flatten([_record("r1", "yelp")])[1]
     assert P.encode_row(FakeTok(), noul, P.QWEN_MARKERS, order="shift:1")["perm"] == [0, 1]   # never reordered
+
+
+# ---- letter prefix (hybrid read-out) -------------------------------------------------
+def _option_segments(enc):
+    """Token ids between each [opt] and its [opt_end], in presented order."""
+    ids = enc["ids"]
+    starts = [i for i, t in enumerate(ids) if t == 902]
+    return [ids[s + 1:e] for s, e in zip(starts, enc["opt_pos"])]
+
+
+def test_letter_token_ids_gives_one_id_per_letter_and_falls_back_to_the_first_token():
+    ids = P.letter_token_ids(FakeTok())
+    assert len(ids) == 26 and len(P.LETTERS) == 26 and P.LETTERS[0] == "A" and P.LETTERS[-1] == "Z"
+    assert ids == [FakeTok().encode(" " + c)[0] for c in P.LETTERS]
+
+    class SplitTok(FakeTok):                      # a tokenizer that needs two tokens per letter
+        def encode(self, text, add_special_tokens=False):
+            return [7, 8]
+    assert P.letter_token_ids(SplitTok()) == [7] * 26
+
+
+def test_encode_row_letter_prefix_labels_options_by_presented_position():
+    row = P.flatten([_record("r1", "yelp")])[0]          # choice, options a b c
+    tok = FakeTok()
+    plain = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=False)
+    for seg, (key, desc) in zip(_option_segments(plain), row["options"]):
+        assert seg == tok.encode(P.option_text("choice", key, desc))      # default: no prefix
+    rng = np.random.default_rng(5)
+    seen = set()
+    for _ in range(20):
+        enc = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=True, rng=rng, letter_prefix=True)
+        seen.add(tuple(enc["perm"]))
+        for j, seg in enumerate(_option_segments(enc)):
+            key, desc = row["options"][enc["perm"][j]]
+            assert seg == tok.encode(f"{P.LETTERS[j]}) " + P.option_text("choice", key, desc))   # letter follows the slot
+        assert enc["perm"][enc["label"]] == row["label"]
+    assert len(seen) > 1
+    assert P.LETTER_PREFIX is False                        # additive option, default off
+
+
+def test_letter_prefix_default_follows_the_module_constant(monkeypatch):
+    row = P.flatten([_record("r1", "yelp")])[0]
+    tok = FakeTok()
+    monkeypatch.setattr(P, "LETTER_PREFIX", True)
+    enc = P.encode_row(tok, row, P.QWEN_MARKERS)
+    assert _option_segments(enc)[0] == tok.encode("A) " + P.option_text("choice", *row["options"][0]))
+    off = P.encode_row(tok, row, P.QWEN_MARKERS, letter_prefix=False)
+    assert _option_segments(off)[0] == tok.encode(P.option_text("choice", *row["options"][0]))
+    (b,) = list(P.batches(tok, [row], 1, shuffle_options=False, device="cpu", letter_prefix=False))
+    assert b["ids"].shape[1] == len(off["ids"])

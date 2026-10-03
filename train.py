@@ -64,6 +64,16 @@ def split_plan(train_splits: str, calib_split: str) -> tuple[list[str], str, lis
     return tr, calib_split, report
 
 
+def hybrid_head_setup(torso, tok) -> dict:
+    """Extra build_head kwargs for the "hybrid" head: the torso's letter embeddings (frozen rows, so the
+    base model before or after LoRA wrapping gives the same table). Also turns the option letter prefix
+    on for every batch this process encodes. Returns {} for any other head."""
+    if head_mod.HEAD_CONFIG.get("name") != "hybrid":
+        return {}
+    P.LETTER_PREFIX = True
+    return {"letter_emb": P.letter_embeddings(torso, tok)}
+
+
 def head_configs(n_layers: int, depth_heads: bool) -> list[dict]:
     """The exact config of every head this run trains: one per tap for laddered heads, else one.
     Saved to config.json so serve.py rebuilds the head that was trained, not the current default."""
@@ -138,6 +148,7 @@ def main(argv=None):
     tok, torso, d_model = P.load_torso(args.torso, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device=device)
     for p in torso.parameters():
         p.requires_grad_(False)
+    head_extra = hybrid_head_setup(torso, tok)          # {} unless HEAD_CONFIG name == "hybrid"
     if device == "cuda":
         torso.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     LORA["target_modules"] = tcfg["lora_targets"]      # per-torso module names (Qwen names would not match LFM/ModernBERT)
@@ -150,7 +161,7 @@ def main(argv=None):
 
     n_layers = len(taps)
     head_cfgs = head_configs(n_layers, DEPTH_HEADS)
-    heads = torch.nn.ModuleList([head_mod.build_head(d_model, n_layers, c) for c in head_cfgs]).to(device)
+    heads = torch.nn.ModuleList([head_mod.build_head(d_model, n_layers, {**c, **head_extra}) for c in head_cfgs]).to(device)
     # from_pretrained leaves the model in eval mode and peft keeps it there: without this, LoRA dropout
     # is a no-op and HF gradient checkpointing (which checks self.training) never activates.
     torso.train()

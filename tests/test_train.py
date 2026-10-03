@@ -40,3 +40,18 @@ def test_split_plan_defaults_and_final_retrain_mode():
     assert train.split_plan("train", "dev") == (["train"], "dev", ["heldout"])
     tr, calib, report = train.split_plan("train,dev", "heldout")
     assert tr == ["train", "dev"] and calib == "heldout" and report == []
+
+
+def test_hybrid_head_setup_gives_letter_emb_and_prefix_only_for_hybrid(monkeypatch):
+    from tests.test_data import FakeTok
+    from tests.test_harness import _FakeTorso
+    torso, tok = _FakeTorso(), FakeTok()
+    monkeypatch.setattr(P, "LETTER_PREFIX", False)
+    monkeypatch.setattr(train.head_mod, "HEAD_CONFIG", {**train.head_mod.HEAD_CONFIG, "name": "hybrid"})
+    extra = train.hybrid_head_setup(torso, tok)
+    assert extra["letter_emb"].shape == (26, 8) and P.LETTER_PREFIX is True
+    heads = [train.head_mod.build_head(8, 4, {**c, **extra}) for c in train.head_configs(4, depth_heads=True)]
+    assert len(heads) == 4 and all(type(h).__name__ == "HybridHead" for h in heads)
+    monkeypatch.setattr(P, "LETTER_PREFIX", False)
+    monkeypatch.setattr(train.head_mod, "HEAD_CONFIG", {**train.head_mod.HEAD_CONFIG, "name": "pointer"})
+    assert train.hybrid_head_setup(torso, tok) == {} and P.LETTER_PREFIX is False

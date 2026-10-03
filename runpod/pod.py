@@ -10,6 +10,7 @@ does not support scp/rsync).
     uv run python runpod/pod.py status          # desiredStatus, public ip:port
     uv run python runpod/pod.py ssh [cmd...]    # ssh in, or run one command
     uv run python runpod/pod.py sync            # rsync repo (+ data/cache) to /workspace/decider
+    uv run python runpod/pod.py pull runs/<run> # rsync a run dir back to runs/pod/
     uv run python runpod/pod.py stop            # stop billing GPU; volume persists
     uv run python runpod/pod.py terminate       # delete pod and its volume
 
@@ -114,6 +115,16 @@ def sync(with_cache: bool = True):
     print("synced")
 
 
+def pull(remote: str, local: str = "runs/pod"):
+    """rsync a path under /workspace/decider on the pod to the laptop, e.g. pull runs/tierB-qwen2b-ln16."""
+    ip, port = ssh_target()
+    rsh = f"ssh -i {KEY} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p {port}"
+    dest = ROOT / local
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.check_call(["rsync", "-az", "--stats", "-e", rsh, f"root@{ip}:/workspace/decider/{remote.rstrip('/')}", f"{dest}/"])
+    print(f"pulled {remote} -> {dest}")
+
+
 def stop():
     print(gql(f'mutation {{ podStop(input: {{ podId: "{pod_id()}" }}) {{ id desiredStatus }} }}'))
 
@@ -127,4 +138,4 @@ def terminate():
 if __name__ == "__main__":
     cmd, *rest = sys.argv[1:] or ["status"]
     {"create": create, "status": status, "ssh": lambda: ssh(rest), "sync": lambda: sync("--no-cache" not in rest),
-     "stop": stop, "terminate": terminate}[cmd]()
+     "pull": lambda: pull(*rest), "stop": stop, "terminate": terminate}[cmd]()

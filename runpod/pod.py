@@ -83,7 +83,7 @@ def create():
 
 def _create_one(gpu: str, cloud: str, env_s: str):
     q = f'''mutation {{ podFindAndDeployOnDemand(input: {{
-        cloudType: {cloud}, gpuCount: 1, gpuTypeId: {json.dumps(gpu)},
+        cloudType: {cloud}, gpuCount: 1, gpuTypeId: {json.dumps(gpu)}, supportPublicIp: true,
         name: {json.dumps(TEMPLATE["name"])}, imageName: {json.dumps(TEMPLATE["imageName"])},
         volumeInGb: {TEMPLATE["volumeInGb"]}, containerDiskInGb: {TEMPLATE["containerDiskInGb"]},
         minVcpuCount: 4, minMemoryInGb: 16, volumeMountPath: {json.dumps(TEMPLATE["volumeMountPath"])},

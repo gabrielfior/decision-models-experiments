@@ -63,8 +63,9 @@ def test_loss_decreases_on_a_learnable_toy_problem():
     assert loss.item() < 0.5 * first
 
 
-def test_baseline_pointer_head_parameter_count_is_two_projections():
+def test_baseline_pointer_head_parameter_count_is_two_projections_plus_norm():
     head = head_mod.build_head(1024, 4)
     n = sum(p.numel() for p in head.parameters())
     width = head_mod.HEAD_CONFIG["width"]
-    assert n == 2 * 1024 * width  # W_q and W_k, no biases
+    norm = 2 * 1024 if head_mod.HEAD_CONFIG.get("norm") else 0
+    assert n == 2 * 1024 * width + norm  # W_q and W_k (no biases) + LayerNorm affine

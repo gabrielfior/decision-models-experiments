@@ -44,23 +44,27 @@ import torch.nn.functional as F
 HEAD_CONFIG = {
     "name": "pointer",
     "width": 256,
-    "layer": -1,
+    "layer": 1,       # depth-sweep: 0/1/2/3 = layers 12/16/20/24
+    "norm": True,     # LayerNorm before q/k so shallow taps (norm 2-6) compare with deep (norm ~120)
 }
 
 MASK_VALUE = -1.0e4  # finite so bf16/fp16 and gradient checks stay well-behaved
 
 
 class PointerHead(nn.Module):
-    def __init__(self, d_model: int, width: int, layer: int):
+    def __init__(self, d_model: int, width: int, layer: int, norm: bool = False):
         super().__init__()
+        # One LayerNorm shared by the answer and option vectors: both come from the same
+        # tapped layer, so one scale/shift suffices and option equivariance is preserved.
+        self.norm = nn.LayerNorm(d_model) if norm else nn.Identity()
         self.q = nn.Linear(d_model, width, bias=False)
         self.k = nn.Linear(d_model, width, bias=False)
         self.layer = layer
         self.scale = 1.0 / math.sqrt(width)
 
     def forward(self, h_ans: torch.Tensor, h_opts: torch.Tensor, opt_mask: torch.Tensor) -> torch.Tensor:
-        a = h_ans[:, self.layer]        # [B, d]
-        o = h_opts[:, self.layer]       # [B, K, d]
+        a = self.norm(h_ans[:, self.layer])        # [B, d]
+        o = self.norm(h_opts[:, self.layer])       # [B, K, d]
         q = self.q(a)                   # [B, w]
         k = self.k(o)                   # [B, K, w]
         logits = torch.einsum("bw,bkw->bk", q, k) * self.scale
@@ -74,5 +78,5 @@ def build_head(d_model: int, n_layers: int, cfg: dict | None = None) -> nn.Modul
     """Construct the head the trainer will optimise. n_layers = len(prepare.TAP_LAYERS)."""
     cfg = {**HEAD_CONFIG, **(cfg or {})}
     if cfg["name"] == "pointer":
-        return PointerHead(d_model, cfg["width"], cfg["layer"])
+        return PointerHead(d_model, cfg["width"], cfg["layer"], cfg.get("norm", False))
     raise ValueError(f"unknown head {cfg['name']!r}")

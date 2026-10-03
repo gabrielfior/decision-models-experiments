@@ -68,6 +68,11 @@ def _cache(torso: str, commit: str, batch_size: int = 16):
 @app.function(gpu=GPU, volumes={V: VOL}, timeout=3 * 3600)
 def _train(argv: list[str], commit: str):
     os.environ["DECIDER_COMMIT"] = commit
+    # One results file per run: concurrent containers committing the same volume file clobber each
+    # other (last writer wins), which lost two rows on 2026-10-03. Merge locally from runs/*/results.tsv.
+    out = argv[argv.index("--out") + 1]
+    os.makedirs(out, exist_ok=True)
+    os.environ["DECIDER_RESULTS"] = f"{out}/results.tsv"
     import train
     train.main(argv)
     VOL.commit()

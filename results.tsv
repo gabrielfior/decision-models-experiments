@@ -9,3 +9,5 @@ timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	
 2026-10-03T14:36:44	modal:ebc014b	B	LN16 head + Kev LoRA r16: promoted Tier A head with LoRA	1	0.6409	0.0106	0.7430	0.3439	0.0273	0.6055	0.4964	0.0215	27.0857				
 2026-10-03T14:53:08	modal:b9bdb91	B	LN16 head + Kev LoRA r16: promoted Tier A head with LoRA	1	0.6191	0.0110	0.7220	0.3494	0.0133	0.6139	0.4948	0.0360	27.0054				
 2026-10-03T15:37:48	modal:1f0b412	B	LN16 head + Kev LoRA r16, 2 epochs (Kev epoch count), dropout active	1	0.6408	0.0110	0.7415	0.3390	0.0146	0.6577	0.4453	0.0140	26.9982	True			
+10031155	modal:rebuilt	B	LFM2.5-230M + LoRA r16 (all linear), LN pointer head tap 1 (layer 9)	1	0.5077	0.0114	0.6315	0.4375	0.0195	0.4299	0.6727	0.0410	8.0766	True	[0.5077353422812462]		
+10031155	modal:rebuilt	B	ModernBERT-large + LoRA r16 (Wqkv Wo Wi), LN pointer head tap 1 (layer 19), untrained marker embeddings	1	0.4773	0.0117	0.6075	0.4584	0.0351	0.3819	0.7148	0.0760	14.8987	True	[0.47728484721151543]		

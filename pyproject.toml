@@ -4,16 +4,42 @@ version = "0.1.0"
 description = "Autoresearch loop for sub-1B Jev-class decision models (frozen torso + small option-scoring head)"
 requires-python = ">=3.11,<3.13"
 dependencies = [
-    "torch>=2.4",
-    "numpy>=1.26",
+    # torch 2.8.0 matches the RunPod image (runpod/pytorch ...-cu1281-torch280) and Kev's lock file.
+    "torch==2.8.0",
+    "numpy>=2.0",
 ]
-
-[project.optional-dependencies]
-# GPU-side deps (torso loading, LoRA, data download) are pinned in [dependency-groups] gpu below
-# once the transformers version that loads Qwen3.5 + LFM2.5 + ModernBERT is confirmed.
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# Torso-side stack. transformers 5.17 is what Kev's lock loads Qwen3.5-0.8B-Base with;
+# LFM2.5 needs >=5.0 and ModernBERT >=4.48, so one pin covers all three torsos
+# with trust_remote_code=False. peft/accelerate pins follow Kev's lock.
+gpu = [
+    "transformers==5.17.0",
+    "peft==0.21.0",
+    "accelerate>=1.15.0",
+    "datasets>=3.0",
+    "huggingface-hub>=0.30",
+    "safetensors>=0.4",
+]
+# Optional fused kernels for Qwen3.5's GatedDeltaNet layers (CUDA Linux only; without them
+# transformers silently falls back to slower, more memory-hungry PyTorch ops).
+kernels = [
+    "flash-linear-attention==0.5.2 ; sys_platform == 'linux'",
+    "causal-conv1d==1.7.0 ; sys_platform == 'linux'",
+]
+# Serverless driver for the first ~$5 of GPU work.
+cloud = ["modal>=1.6"]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

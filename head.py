@@ -27,8 +27,10 @@ head should not apply its own softmax.
 Baseline below: the Strands / Kev pointer head. Two linear maps and a dot product,
     q = W_q h_ans,  k_i = W_k h_i,  z_i = q . k_i / sqrt(width).
 It is one attention step whose keys are the options: the question vector points
-at the option it matches. With d = 1024 and width = 512 that is 2 * 1024 * 512
-= 1,048,576 parameters, no biases.
+at the option it matches. Kev's 0.8B head uses width = 256; with d = 1024 that is
+2 * 1024 * 256 = 524,288 parameters here (Kev adds biases, 524,800; a bias on k
+adds the same constant to every option and cancels in the softmax, so it is left
+out). Strands puts a LayerNorm in front and uses d = 2048, giving ~1.05M.
 """
 from __future__ import annotations
 
@@ -41,7 +43,7 @@ import torch.nn.functional as F
 # Edit these to run a variant. "layer" indexes the tapped-layer axis L (−1 = deepest tap).
 HEAD_CONFIG = {
     "name": "pointer",
-    "width": 512,
+    "width": 256,
     "layer": -1,
 }
 

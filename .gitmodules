@@ -1,0 +1,3 @@
+[submodule "jevbench"]
+	path = jevbench
+	url = https://github.com/fstandhartinger/jevbench

@@ -32,6 +32,30 @@ QTYPES = ("noul", "choice", "score")   # JevBench's names: noul = yes/no
 N_SEEDS = 3
 GATE_SE = 2.0                   # keep only if improvement > GATE_SE * standard error
 
+# Corpus: Kev's decision-v7. train.jsonl (12,576 records / 15,576 questions) is on the Hub,
+# not in the Kev repo, and carries no licence of its own (its ten sources include Yelp, which is
+# restrictive), so this repo commits ROW IDS ONLY under data/splits/ and re-downloads rows.
+HF_SUITES_REPO = "jaredpalmer/kev-suites"
+HF_TRAIN_PATH = "v7/decision-v7/train.jsonl"
+# Kev's record: {"state": str|json, "questions": {qid: {"type": noul|choice|score, "instructions",
+#   "criteria": {key: desc} | [level, ...], "label": key|bool|int, "src"}}, "_meta": {"source", ...}}
+# Families (manifest trainable_sources): agnews amazon banking77 boolq dbpedia14 imdb mnli sst5
+# trec yelp legacy_policy compositional. Two are held out of training entirely (plan §6).
+HELD_OUT_FAMILIES = ("trec", "legacy_policy")   # PROPOSED; confirmed in step 2 of the plan
+FAMILY_KEY = ("_meta", "source")
+
+# Sequence layout (knob "read vectors" in plan §2). Markers reuse Qwen's existing reserved tokens,
+# as Kev does, so no new embedding rows have to be learned while the embedding table is frozen:
+#   <state> text </state> <q> instructions <opt> option </opt> <opt> option </opt> ... <decide>
+# We read the hidden state at each </opt> (one per option) and at <decide> (= the plan's <answer>).
+# One causal row per question: Qwen3.5's GatedDeltaNet layers carry state across positions and
+# would leak one question into the next if several were packed into a row.
+QWEN_MARKERS = {
+    "state": "<|fim_prefix|>", "q": "<|fim_middle|>",
+    "opt": "<|box_start|>", "opt_end": "<|box_end|>", "decide": "<|fim_suffix|>",
+}
+MAX_STATE_TOKENS, MAX_ROW_TOKENS = 384, 2048
+
 ROOT = Path(__file__).resolve().parent
 DATA_RAW = ROOT / "data" / "raw"
 DATA_SPLITS = ROOT / "data" / "splits"     # committed: row ids only

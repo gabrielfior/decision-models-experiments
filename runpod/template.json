@@ -1,0 +1,21 @@
+{
+  "_comment": "RunPod Pod template for the Tier B batches that run after the first $5 on Modal. Fill these fields in the RunPod console (Templates > New Template) or via the REST API; field names mirror the console.",
+  "name": "decider-autoresearch-3090",
+  "imageName": "runpod/pytorch:1.4.1-rc.171-cu1281-torch280-ubuntu2204",
+  "containerDiskInGb": 30,
+  "volumeInGb": 20,
+  "volumeMountPath": "/workspace",
+  "ports": "22/tcp",
+  "dockerArgs": "bash -lc 'bash /workspace/decider/runpod/setup.sh && sleep infinity'",
+  "env": {
+    "HF_HOME": "/workspace/hf",
+    "DECIDER_DATA": "/workspace/decider/data",
+    "DECIDER_CACHE": "/workspace/decider/data/cache",
+    "DECIDER_RUNS": "/workspace/decider/runs",
+    "REPO_URL": "<git url of this repo>",
+    "HF_TOKEN": "<optional, only if a dataset turns out to be gated>"
+  },
+  "gpu": "NVIDIA GeForce RTX 3090",
+  "cloudType": "COMMUNITY",
+  "_cost_note": "~$0.22/hr community cloud. Stop the pod between sessions: an idle night costs more than the whole Tier A loop."
+}

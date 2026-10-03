@@ -1,0 +1,2 @@
+timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	heldout_acc	heldout_brier	order_sens	p50_ms	kept	per_seed	baseline
+2026-10-03T11:02:46	905353c	A	baseline LFM2.5-230M: Kev pointer head (width 256, last tap layer 14) on frozen cache	3	0.2015	0.0110	0.3857	0.6877	0.0870	0.2855	0.7752	0.0000	nan	True	0.2555,0.1589,0.1903	

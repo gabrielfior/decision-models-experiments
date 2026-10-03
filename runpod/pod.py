@@ -63,6 +63,7 @@ def create():
     pub = ensure_key()
     env = {k: v for k, v in TEMPLATE["env"].items() if not v.startswith("<")}
     env["SSH_PUBLIC_KEY"] = pub
+    env["PUBLIC_KEY"] = pub          # runpod/* images start sshd from this one
     env_s = ", ".join(f'{{ key: "{k}", value: {json.dumps(v)} }}' for k, v in env.items())
     q = f'''mutation {{ podFindAndDeployOnDemand(input: {{
         cloudType: {TEMPLATE["cloudType"]}, gpuCount: 1, gpuTypeId: {json.dumps(TEMPLATE["gpu"])},

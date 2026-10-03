@@ -1,0 +1,15 @@
+# env
+.venv/
+__pycache__/
+*.pyc
+.superpowers/
+# data and caches never committed; row ids under data/splits/ are committed
+data/raw/
+data/cache/
+checkpoints/
+runs/
+*.pt
+*.safetensors
+*.arrow
+# secrets
+.env

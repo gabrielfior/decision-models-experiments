@@ -64,6 +64,12 @@ Promote at most the top three Tier A results per day to Tier B.
 - JevBench public (231 decisions) is run at the start, after each Tier B promotion,
   and at the end. Never inside the loop.
 
+## Out of scope (user decision, 3 Oct 2026)
+
+Distilling from other people's decision models (e.g. Mapika decider-4b, Strands, Kev checkpoints) is
+excluded: the result must be this repo's own contribution. `train.py --kl-teacher` may only be used with
+`scripts/teacher.py --backend ours` (self- or ensemble-distillation from this repo's runs), if at all.
+
 ## Rules
 
 1. One idea per experiment. Say the hypothesis in `--note` before you run it.

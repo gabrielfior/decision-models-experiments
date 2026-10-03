@@ -168,3 +168,12 @@ def test_encode_truncates_long_instructions_so_options_keep_their_text():
     assert enc["instr_tokens"] == P.MAX_INSTR_TOKENS
     # each option still has its own text (not capped to 1 token)
     assert enc["opt_pos"][1] - enc["opt_pos"][0] > 2
+
+
+def test_torso_config_carries_lora_target_modules_per_architecture():
+    q = P.torso_config("Qwen/Qwen3.5-0.8B-Base")["lora_targets"]
+    assert "q_proj" in q and "in_proj_qkv" in q and "gate_proj" in q          # attention, GatedDeltaNet, MLP
+    l = P.torso_config("LiquidAI/LFM2.5-230M-Base")["lora_targets"]
+    assert set(l) == {"q_proj", "k_proj", "v_proj", "out_proj", "in_proj", "w1", "w2", "w3"}
+    m = P.torso_config("answerdotai/ModernBERT-large")["lora_targets"]
+    assert set(m) == {"Wqkv", "Wo", "Wi"}

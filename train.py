@@ -122,6 +122,7 @@ def main(argv=None):
         p.requires_grad_(False)
     if device == "cuda":
         torso.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    LORA["target_modules"] = tcfg["lora_targets"]      # per-torso module names (Qwen names would not match LFM/ModernBERT)
     if args.top_half_only:
         LORA["layers_to_transform"] = list(range(tcfg["n_layers"] // 2, tcfg["n_layers"]))
     lora_cfg = {k: v for k, v in LORA.items() if v is not None}

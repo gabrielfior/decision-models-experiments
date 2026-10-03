@@ -1,3 +1,4 @@
 timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	heldout_acc	heldout_brier	order_sens	p50_ms	kept	per_seed	baseline
 2026-10-03T10:55:16	7b38e1a	A	baseline: Kev pointer head (width 256, layer 24) on frozen Qwen3.5-0.8B cache	3	0.2874	0.0114	0.4633	0.6268	0.0631	0.2386	0.7889	0.0000	nan	True	0.3181,0.2904,0.2539	
 2026-10-03T11:17:36	307accf	A	LN pointer layer 16 (promoted round-1 winner), rerun in main vs plain pointer baseline	3	0.4372	0.0117	0.5783	0.5003	0.0324	0.3590	0.8093	0.0000	nan	True	0.4214,0.4508,0.4395	0.3181,0.2904,0.2539
+2026-10-03T11:45:24	2b09698	A	LN pointer layer 16 re-run to save head.pt for the frozen-torso JevBench milestone	3	0.4372	0.0117	0.5783	0.5003	0.0324	0.3590	0.8093	0.0000	nan	False	0.4214,0.4508,0.4395	0.4214,0.4508,0.4395	65d30ba7

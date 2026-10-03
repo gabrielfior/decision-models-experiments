@@ -62,18 +62,25 @@ MAX_STATE_TOKENS, MAX_INSTR_TOKENS, MAX_ROW_TOKENS = 384, 512, 2048
 # The torso ladder (plan §3). Each torso brings its own single-token markers (chosen from tokens
 # the tokenizer already has) and the depths tapped for the read-out, at 50/67/83/100% of depth.
 TORSOS = {
-    "Qwen/Qwen3.5-0.8B-Base": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24},
+    "Qwen/Qwen3.5-0.8B-Base": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
+                               # Kev's targets: attention, MLP and the GatedDeltaNet projections
+                               "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+                                                "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]},
     # LFM2.5: 14 layers (8 short-conv + 6 attention), all causal. FIM tokens saw pretraining;
     # the tool-list tokens are single added tokens with meaningful "list of items" semantics.
     "LiquidAI/LFM2.5-230M-Base": {"markers": {"state": "<|fim_pre|>", "q": "<|fim_mid|>", "opt": "<|tool_list_start|>",
                                                "opt_end": "<|tool_list_end|>", "decide": "<|fim_suf|>"},
-                                  "tap_layers": (7, 9, 12, 14), "n_layers": 14},
+                                  "tap_layers": (7, 9, 12, 14), "n_layers": 14,
+                                  # attention q/k/v/out, short-conv in/out ("out_proj" matches both), MLP w1/w2/w3
+                                  "lora_targets": ["q_proj", "k_proj", "v_proj", "out_proj", "in_proj", "w1", "w2", "w3"]},
     # ModernBERT: 28 bidirectional layers. [SEP] only ever closed a whole sequence in pretraining,
     # so dedicated [unusedN] tokens mark the parts; their embeddings are untrained, so the LoRA/
     # full fine-tune of Tier B has to learn them (Tier A on a frozen torso will be weak here).
     "answerdotai/ModernBERT-large": {"markers": {"state": "[unused0]", "q": "[unused1]", "opt": "[unused2]",
                                                  "opt_end": "[unused3]", "decide": "[unused4]"},
-                                     "tap_layers": (14, 19, 23, 28), "n_layers": 28, "bidirectional": True},
+                                     "tap_layers": (14, 19, 23, 28), "n_layers": 28, "bidirectional": True,
+                                     # fused qkv + output projection in attention, Wi (GeGLU in) and Wo (shared name) in the MLP
+                                     "lora_targets": ["Wqkv", "Wo", "Wi"]},
 }
 
 

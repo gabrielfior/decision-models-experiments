@@ -86,7 +86,18 @@ def main(argv=None):
     ap.add_argument("--epochs", type=int, default=EPOCHS)
     ap.add_argument("--max-rows", type=int, default=None, help="debug: truncate the train split")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--rank", type=int, default=None, help="LoRA rank override (alpha stays 2r)")
+    ap.add_argument("--top-half-only", action="store_true", help="adapt only the top half of the layers")
+    ap.add_argument("--depth-heads", action="store_true", help="laddered heads at every tap, summed loss (Needle)")
+    ap.add_argument("--lr", type=float, default=None)
     args = ap.parse_args(argv)
+    global DEPTH_HEADS, LR
+    if args.rank:
+        LORA["r"], LORA["lora_alpha"] = args.rank, 2 * args.rank
+    if args.lr:
+        LR = args.lr
+    if args.depth_heads:
+        DEPTH_HEADS = True
 
     from peft import LoraConfig, get_peft_model
 
@@ -104,6 +115,8 @@ def main(argv=None):
         p.requires_grad_(False)
     if device == "cuda":
         torso.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+    if args.top_half_only:
+        LORA["layers_to_transform"] = list(range(tcfg["n_layers"] // 2, tcfg["n_layers"]))
     lora_cfg = {k: v for k, v in LORA.items() if v is not None}
     torso = get_peft_model(torso, LoraConfig(**lora_cfg))
     if device == "cuda":

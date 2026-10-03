@@ -1,0 +1,68 @@
+{
+ "seed": 20261003,
+ "n_train": 8000,
+ "n_dev": 2000,
+ "held_out_families": [
+  "trec",
+  "legacy_policy"
+ ],
+ "source": {
+  "repo": "jaredpalmer/kev-suites",
+  "path": "v7/decision-v7/train.jsonl",
+  "sha256": "7ed5254b5cb5291baefaceb09edf7e13110258211518c8038f4a12c11bd628ad"
+ },
+ "counts": {
+  "train": {
+   "rows": 8000,
+   "by_type": {
+    "noul": 2993,
+    "choice": 3480,
+    "score": 1527
+   },
+   "by_family": {
+    "agnews": 1788,
+    "amazon": 466,
+    "banking77": 635,
+    "boolq": 608,
+    "compositional": 992,
+    "dbpedia14": 611,
+    "imdb": 611,
+    "mnli": 646,
+    "sst5": 479,
+    "yelp": 1164
+   }
+  },
+  "dev": {
+   "rows": 2000,
+   "by_type": {
+    "noul": 667,
+    "choice": 667,
+    "score": 666
+   },
+   "by_family": {
+    "agnews": 390,
+    "amazon": 267,
+    "banking77": 95,
+    "boolq": 143,
+    "compositional": 220,
+    "dbpedia14": 111,
+    "imdb": 121,
+    "mnli": 111,
+    "sst5": 256,
+    "yelp": 286
+   }
+  },
+  "heldout": {
+   "rows": 1896,
+   "by_type": {
+    "noul": 224,
+    "choice": 1224,
+    "score": 448
+   },
+   "by_family": {
+    "legacy_policy": 896,
+    "trec": 1000
+   }
+  }
+ }
+}

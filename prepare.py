@@ -16,7 +16,10 @@ Sections:
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import math
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -169,6 +172,210 @@ def keep(baseline_selection, candidate_selection, selection_se: float) -> bool:
 
 
 # ----------------------------------------------------------------------------
+# 3. data
+# ----------------------------------------------------------------------------
+def download_corpus(dest: Path | None = None) -> Path:
+    """Fetch decision-v7 train.jsonl from the Hub (public, ~19 MB). Returns the local path."""
+    dest = Path(dest or (Path(__import__("os").environ.get("DECIDER_DATA", DATA_RAW.parent)) / "raw" / "train.jsonl"))
+    if dest.exists():
+        return dest
+    from huggingface_hub import hf_hub_download
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    got = hf_hub_download(HF_SUITES_REPO, HF_TRAIN_PATH, repo_type="dataset")
+    import shutil
+    shutil.copyfile(got, dest)
+    return dest
+
+
+def load_records(path: Path) -> list[dict]:
+    with open(path) as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def _option_list(q: dict) -> tuple[list[tuple[str, str | None]], int]:
+    """Turn a Kev question into an ordered option list and an integer label."""
+    t, crit, label = q["type"], q.get("criteria"), q["label"]
+    if t == "noul":
+        crit = crit or {}
+        options = [("no", crit.get("false")), ("yes", crit.get("true"))]
+        return options, int(bool(label))
+    if t == "score":
+        return [(str(i), desc) for i, desc in enumerate(crit)], int(label)
+    if t == "choice":
+        keys = list(crit.keys())
+        return [(k, crit[k]) for k in keys], keys.index(label)
+    raise ValueError(f"unknown question type {t!r}")
+
+
+def as_text(x) -> str:
+    """Kev stores some states and instructions as JSON (dicts, lists of chat turns); render them."""
+    if isinstance(x, str):
+        return x
+    if isinstance(x, dict) and all(isinstance(v, str) for v in x.values()):
+        return "\n".join(f"{k}: {v}" for k, v in x.items())
+    return json.dumps(x, ensure_ascii=False)
+
+
+def flatten(records: list[dict]) -> list[dict]:
+    """One row per question. Kev packs several questions per record; the torso sees one per row."""
+    rows = []
+    for rec in records:
+        meta = rec["_meta"]
+        state = as_text(rec["state"])
+        for qid, q in rec["questions"].items():
+            options, label = _option_list(q)
+            rows.append({
+                "id": f"{meta['id']}#{qid}",
+                "group": meta.get("group_id", meta["id"]),
+                "family": meta.get("source", q.get("src")),
+                "qtype": q["type"],
+                "state": state,
+                "instructions": as_text(q["instructions"]),
+                "options": options,
+                "label": label,
+                "n_options": len(options),
+            })
+    return rows
+
+
+def build_splits(rows: list[dict], seed: int = SEED, n_train: int = N_TRAIN, n_dev: int = N_DEV,
+                 held_out=HELD_OUT_FAMILIES) -> dict[str, list[str]]:
+    """Fix train / dev / heldout as lists of row ids.
+
+    - heldout: every row whose family is in held_out (never trained on, reported only).
+    - dev: n_dev rows stratified by question type, chosen group-by-group so that no
+      group_id (Kev's paraphrase / minimal-pair grouping) is split across train and dev.
+    - train: n_train rows from the remaining groups.
+    Rows left over are simply unused. Deterministic in the seed.
+    """
+    rng = np.random.default_rng(seed)
+    heldout = [r["id"] for r in rows if r["family"] in held_out]
+    pool = [r for r in rows if r["family"] not in held_out]
+    groups: dict[str, list[dict]] = {}
+    for r in pool:
+        groups.setdefault(r["group"], []).append(r)
+    order = sorted(groups)
+    rng.shuffle(order)
+
+    quota = {t: n_dev // len(QTYPES) for t in QTYPES}
+    for t in QTYPES[: n_dev % len(QTYPES)]:
+        quota[t] += 1
+    have = {t: 0 for t in QTYPES}
+    dev: list[str] = []
+    used: set[str] = set()
+    # pass 1: whole groups that fit under every type quota
+    for g in order:
+        contrib = {t: sum(r["qtype"] == t for r in groups[g]) for t in QTYPES}
+        if all(have[t] + contrib[t] <= quota[t] for t in QTYPES) and any(contrib.values()):
+            dev += [r["id"] for r in groups[g]]
+            for t in QTYPES:
+                have[t] += contrib[t]
+            used.add(g)
+        if all(have[t] == quota[t] for t in QTYPES):
+            break
+    # pass 2: fill any deficit row-by-row from unused groups (the group is then burnt)
+    for g in order:
+        if all(have[t] == quota[t] for t in QTYPES):
+            break
+        if g in used:
+            continue
+        take = [r for r in groups[g] if have[r["qtype"]] < quota[r["qtype"]]]
+        if take:
+            for r in take:
+                if have[r["qtype"]] < quota[r["qtype"]]:
+                    dev.append(r["id"])
+                    have[r["qtype"]] += 1
+            used.add(g)
+    if len(dev) != n_dev:
+        raise ValueError(f"could only stratify {len(dev)} dev rows, wanted {n_dev}")
+
+    train: list[str] = []
+    for g in order:
+        if g in used:
+            continue
+        train += [r["id"] for r in groups[g]]
+        used.add(g)
+        if len(train) >= n_train:
+            break
+    if len(train) < n_train:
+        raise ValueError(f"only {len(train)} rows available for train, wanted {n_train}")
+    return {"train": train[:n_train], "dev": dev, "heldout": heldout}
+
+
+def write_splits(splits: dict[str, list[str]], raw_path: Path, rows: list[dict], out_dir: Path = DATA_SPLITS) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for name, ids in splits.items():
+        (out_dir / f"{name}.txt").write_text("\n".join(ids) + "\n")
+    by_id = {r["id"]: r for r in rows}
+    manifest = {
+        "seed": SEED, "n_train": N_TRAIN, "n_dev": N_DEV, "held_out_families": list(HELD_OUT_FAMILIES),
+        "source": {"repo": HF_SUITES_REPO, "path": HF_TRAIN_PATH, "sha256": hashlib.sha256(raw_path.read_bytes()).hexdigest()},
+        "counts": {name: {"rows": len(ids),
+                          "by_type": {t: sum(by_id[i]["qtype"] == t for i in ids) for t in QTYPES},
+                          "by_family": dict(sorted(Counter(by_id[i]["family"] for i in ids).items()))}
+                   for name, ids in splits.items()},
+    }
+    (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=1) + "\n")
+
+
+def load_split(name: str, raw_path: Path | None = None) -> list[dict]:
+    """Rows of a split in the committed id order."""
+    ids = (DATA_SPLITS / f"{name}.txt").read_text().split()
+    rows = flatten(load_records(download_corpus(raw_path)))
+    by_id = {r["id"]: r for r in rows}
+    return [by_id[i] for i in ids]
+
+
+# ----------------------------------------------------------------------------
+# 4. sequence layout
+# ----------------------------------------------------------------------------
+def option_text(qtype: str, key: str, desc: str | None) -> str:
+    if qtype == "score" and desc:
+        return desc
+    return f"{key}: {desc}" if desc else key
+
+
+def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = False, rng=None) -> dict:
+    """Tokenise one row as  <state> s </state>?  — see the layout note next to QWEN_MARKERS.
+
+        [state] s_1..s_n [q] i_1..i_m ([opt] o_1..o_k [opt_end])*N [decide]
+
+    Returns ids plus the positions the head reads: decide_pos (the plan's <answer>) and
+    opt_pos (one per option, at its [opt_end]). With shuffle=True a choice question's
+    options are permuted and the label moves with them; noul and score keep their order
+    because the order carries meaning (no/yes, increasing level).
+    """
+    m = {k: tok.convert_tokens_to_ids(v) for k, v in markers.items()}
+    n = row["n_options"]
+    perm = list(range(n))
+    if shuffle and row["qtype"] == "choice":
+        rng = rng or np.random.default_rng()
+        perm = [int(i) for i in rng.permutation(n)]
+    label = perm.index(row["label"])
+
+    state_ids = tok.encode(row["state"], add_special_tokens=False)[:MAX_STATE_TOKENS]
+    instr_ids = tok.encode(row["instructions"], add_special_tokens=False)
+    opt_ids = [tok.encode(option_text(row["qtype"], *row["options"][j]), add_special_tokens=False) for j in perm]
+
+    fixed = len(state_ids) + len(instr_ids) + 3 + 2 * n
+    budget = MAX_ROW_TOKENS - fixed
+    if sum(map(len, opt_ids)) > budget:
+        cap = max(1, budget // n)
+        opt_ids = [o[:cap] for o in opt_ids]
+
+    ids = [m["state"], *state_ids, m["q"], *instr_ids]
+    opt_pos = []
+    for o in opt_ids:
+        ids += [m["opt"], *o, m["opt_end"]]
+        opt_pos.append(len(ids) - 1)
+    ids.append(m["decide"])
+    return {
+        "ids": ids, "decide_pos": len(ids) - 1, "opt_pos": opt_pos, "label": label,
+        "qtype": row["qtype"], "n_options": n, "perm": perm, "state_tokens": len(state_ids), "id": row["id"],
+    }
+
+
+# ----------------------------------------------------------------------------
 # 7. CLI
 # ----------------------------------------------------------------------------
 def main(argv=None):
@@ -178,6 +385,13 @@ def main(argv=None):
     sub.add_parser("cache", help="cache read-out hidden states for TAP_LAYERS (step 4)")
     sub.add_parser("tier-a", help="train head.py on the cache with N_SEEDS seeds and append results.tsv")
     args = ap.parse_args(argv)
+    if args.cmd == "data":
+        raw = download_corpus()
+        rows = flatten(load_records(raw))
+        splits = build_splits(rows)
+        write_splits(splits, raw, rows)
+        print(json.dumps(json.loads((DATA_SPLITS / "manifest.json").read_text())["counts"], indent=1))
+        return
     raise SystemExit(f"'{args.cmd}' is implemented in a later step of the plan; see program.md")
 
 

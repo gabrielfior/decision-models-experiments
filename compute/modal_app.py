@@ -65,7 +65,7 @@ def _cache(torso: str, commit: str, batch_size: int = 16):
     VOL.commit()
 
 
-@app.function(gpu=GPU, volumes={V: VOL}, timeout=3 * 3600)
+@app.function(gpu=GPU, volumes={V: VOL}, timeout=6 * 3600)   # consistency runs (two forwards per step) need > 3 h on an A10G
 def _train(argv: list[str], commit: str):
     os.environ["DECIDER_COMMIT"] = commit
     # One results file per run: concurrent containers committing the same volume file clobber each

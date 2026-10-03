@@ -18,13 +18,13 @@ OUT = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "docs" / "tracker.html"
 
 # ---------------------------------------------------------------- data
 def load_rows():
-    files = ["results.tsv", "results-lfm.tsv", "results-modernbert.tsv"] + sorted(glob.glob(str(ROOT / ".claude/worktrees/*/results*.tsv")))
+    files = ["results.tsv", "results-lfm.tsv", "results-modernbert.tsv", "results-qwen2b.tsv"] + sorted(glob.glob(str(ROOT / ".claude/worktrees/*/results*.tsv")))
     seen, rows = set(), []
     for f in files:
         p = ROOT / f if not str(f).startswith("/") else Path(f)
         if not p.exists():
             continue
-        torso = "LFM2.5-230M" if "lfm" in p.name else "ModernBERT-large" if "modernbert" in p.name else "Qwen3.5-0.8B"
+        torso = "LFM2.5-230M" if "lfm" in p.name else "ModernBERT-large" if "modernbert" in p.name else "Qwen3.5-2B" if "qwen2b" in p.name else "Qwen3.5-0.8B"
         for r in csv.DictReader(open(p), delimiter="\t"):
             key = (r["note"], r.get("per_seed", ""), r["tier"])
             if key in seen or r["note"].startswith("smoke"):
@@ -143,7 +143,7 @@ def jev_panel(j):
 # ---------------------------------------------------------------- page
 rows = load_rows()
 jev = load_jevbench()
-A = {t: [r for r in rows if r["tier"] == "A" and r["torso"] == t] for t in ("Qwen3.5-0.8B", "LFM2.5-230M", "ModernBERT-large")}
+A = {t: [r for r in rows if r["tier"] == "A" and r["torso"] == t] for t in ("Qwen3.5-0.8B", "Qwen3.5-2B", "LFM2.5-230M", "ModernBERT-large")}
 B = [r for r in rows if r["tier"] == "B"]
 kept_total = sum(r["kept"] for r in rows)
 best_a = max((r["sel"] for r in A["Qwen3.5-0.8B"] if r["kept"]), default=0)
@@ -190,7 +190,7 @@ page = f'''<title>Decider Research Tracker</title>
 </style>
 <div class="wrap">
   <h1>Decider Research Tracker</h1>
-  <p>Every experiment of the sub-1B decision-model search, in run order. The y axis is the dev selection score (mean over question types of ½[(acc − chance)/(1 − chance) + (1 − Brier)]; higher is better, 1.0 is perfect). Filled points passed the keep gate (more than two noise floors above the pinned baseline); hollow points were discarded. The black line is the best kept score so far. Hover a point for its note.</p>
+  <p>Every experiment of the decision-model search, in run order. Goal 2 (since 3 Oct evening): beat Strands Decider 2B on JevBench public, 167 of 231. The y axis is the dev selection score (mean over question types of ½[(acc − chance)/(1 − chance) + (1 − Brier)]; higher is better, 1.0 is perfect). Filled points passed the keep gate (more than two noise floors above the pinned baseline); hollow points were discarded. The black line is the best kept score so far. Hover a point for its note.</p>
   <div class="strip">
     <div class="tile"><div class="k">Experiments</div><div class="v">{len(rows)}</div><div class="s">{kept_total} kept</div></div>
     <div class="tile"><div class="k">Tier A best, frozen 0.8B</div><div class="v">{best_a:.3f}</div><div class="s">from 0.287 at the start</div></div>
@@ -199,6 +199,7 @@ page = f'''<title>Decider Research Tracker</title>
   </div>
   <h2>Tier A: head search on cached frozen-torso states</h2>
   {panel(A["Qwen3.5-0.8B"], "Qwen3.5-0.8B-Base, frozen torso", 0.15, 0.50, True)}
+  {panel(A["Qwen3.5-2B"], "Qwen3.5-2B-Base, frozen torso (depth sweep: taps 24, 16, 12, 20 in run order)", 0.15, 0.50, False)}
   {panel(A["LFM2.5-230M"], "LFM2.5-230M-Base, frozen torso", 0.15, 0.50, False)}
   {panel(A["ModernBERT-large"], "ModernBERT-large, frozen torso", 0.15, 0.50, False)}
   <h2>Tier B: LoRA on the torso + head</h2>

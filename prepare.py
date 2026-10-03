@@ -774,13 +774,15 @@ def main(argv=None):
     a.add_argument("--torso", default="Qwen3.5-0.8B-Base")
     a.add_argument("--epochs", type=int, default=20)
     a.add_argument("--no-gate", action="store_true", help="record without comparing to a baseline")
+    a.add_argument("--seeds", default=",".join(str(i) for i in range(N_SEEDS)), help="comma-separated seeds, e.g. 3,4,5 for a replication")
     args = ap.parse_args(argv)
     if args.cmd == "cache":
         cache_features(args.torso, splits=tuple(args.splits.split(",")), batch_size=args.batch_size)
         return
     if args.cmd == "tier-a":
         import head as head_mod
-        tier_a(head_mod, torso=args.torso, epochs=args.epochs, note=args.note, baseline=None if args.no_gate else "auto")
+        tier_a(head_mod, torso=args.torso, epochs=args.epochs, note=args.note, baseline=None if args.no_gate else "auto",
+               seeds=tuple(int(x) for x in args.seeds.split(",")))
         return
     if args.cmd == "data":
         raw = download_corpus()

@@ -5,3 +5,7 @@ timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	
 2026-10-03T14:48:03	pod:pod	B	baseline replicate seed 1: Kev recipe r16, pointer head	1	0.6195	0.0111	0.7225	0.3486	0.0171	0.6108	0.4894	0.0530	42.2004				
 2026-10-03T15:02:19	pod:pod	B	LoRA rank 64 (alpha 128), Kev recipe otherwise	1	0.6135	0.0110	0.7185	0.3584	0.0164	0.5823	0.5220	0.0305	36.2972				
 2026-10-03T15:16:09	pod:pod	B	laddered depth heads at taps 12/16/20/24, summed loss (Needle)	1	0.6258	0.0109	0.7295	0.3496	0.0195	0.6197	0.5110	0.0425	33.3307				
+2026-10-03T14:16:46	modal:5945672	B	baseline: Kev recipe r16 a32 lr1e-4 1 epoch 8k rows, pointer head	1	0.6291	0.0109	0.7320	0.3459	0.0293	0.6007	0.5070	0.0460	27.1164				
+2026-10-03T14:36:44	modal:ebc014b	B	LN16 head + Kev LoRA r16: promoted Tier A head with LoRA	1	0.6409	0.0106	0.7430	0.3439	0.0273	0.6055	0.4964	0.0215	27.0857				
+2026-10-03T14:53:08	modal:b9bdb91	B	LN16 head + Kev LoRA r16: promoted Tier A head with LoRA	1	0.6191	0.0110	0.7220	0.3494	0.0133	0.6139	0.4948	0.0360	27.0054				
+2026-10-03T15:37:48	modal:1f0b412	B	LN16 head + Kev LoRA r16, 2 epochs (Kev epoch count), dropout active	1	0.6408	0.0110	0.7415	0.3390	0.0146	0.6577	0.4453	0.0140	26.9982	True			

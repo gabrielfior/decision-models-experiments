@@ -41,3 +41,18 @@ frozen torso gives; this is the torso-capacity view of the 0.8B→4B gap.
 3× the dev SE). Lanes must gate against a pinned baseline, not their own last keep. LoRA dropout and
 gradient checkpointing were silently off until `torso.train()` was added (all Tier B rows above trained
 with dropout 0). JevBench temperatures fitted on our dev slice over-sharpen the hard tier (ECE 0.09–0.19).
+
+**Torso swap with LoRA (1 epoch, 8k rows, LayerNorm pointer head at tap 1).**
+
+| torso | params | dev acc | dev sel | held-out acc | order sens | JevBench | CPU p50 |
+|---|---|---|---|---|---|---|---|
+| Qwen3.5-0.8B-Base | 752M text | 0.743 | 0.641 | 0.605 | 2.2% | 152/231 = 0.658 | 2.3 s |
+| LFM2.5-230M-Base | 230M | 0.632 | 0.508 | 0.430 | 4.1% | 110/231 = 0.476 | 0.23 s |
+| ModernBERT-large | 395M | 0.608 | 0.477 | 0.382 | 7.6% | 106/231 = 0.459 | 0.14 s |
+
+The 0.8B torso loses ~0.1 accuracy from dev to JevBench; the two small torsos lose ~0.15, and their
+held-out-family accuracy is much lower: the smaller models memorise the training families and generalise
+less. ModernBERT's order sensitivity is the highest of all, which fits a bidirectional model that sees
+every option while reading each one. Neither small torso approaches Kev-0.8B (0.636) with this recipe;
+the 0.8B remains the smallest torso in this ladder that is competitive. LoRA rank 64 on Qwen did not beat
+rank 16 (0.6135 vs 0.6195 selection, held-out 0.582 vs 0.611).

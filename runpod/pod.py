@@ -129,8 +129,10 @@ def sync(with_cache: bool = True):
                 "--exclude", "results*.tsv"]   # the pod appends its own rows; pull them, never push over them
     if not with_cache:
         excludes += ["--exclude", "data/cache"]
-    subprocess.check_call(["rsync", "-az", "--stats", "-e", rsh, *excludes, f"{ROOT}/", f"root@{ip}:/workspace/decider/"])
-    print("synced")
+    rc = subprocess.call(["rsync", "-az", "--stats", "-e", rsh, *excludes, f"{ROOT}/", f"root@{ip}:/workspace/decider/"])
+    if rc not in (0, 23, 24):   # 23/24: files transferred but some attributes/vanished files could not be set (network FS)
+        raise SystemExit(f"rsync failed with code {rc}")
+    print("synced" + (" (rsync partial-attribute warnings ignored)" if rc else ""))
 
 
 def pull(remote: str, local: str = "runs/pod"):

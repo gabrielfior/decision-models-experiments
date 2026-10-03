@@ -23,6 +23,7 @@ import math
 import time
 from pathlib import Path
 
+import numpy as np
 import torch
 
 import head as head_mod
@@ -116,7 +117,7 @@ def main(argv=None):
     steps = args.epochs * math.ceil(len(train_rows) / BATCH)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=[LR, HEAD_LR], total_steps=steps, pct_start=WARMUP_FRAC)
 
-    rng = torch.Generator().manual_seed(args.seed)
+    rng = np.random.default_rng(args.seed)   # numpy: encode_row shuffles options with it
     t0 = time.time()
     step = 0
     for epoch in range(args.epochs):

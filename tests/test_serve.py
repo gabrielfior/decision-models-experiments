@@ -37,3 +37,10 @@ def test_build_answer_probabilities_sum_to_one_within_harness_tolerance():
     p = np.array([1 / 3, 1 / 3, 1 / 3])
     ans = serve.build_answer("choice", [("a", None), ("b", None), ("c", None)], p)
     assert abs(sum(ans["probabilities"].values()) - 1) < 1e-3
+
+
+def test_saved_head_config_does_not_inherit_newer_defaults():
+    # a run saved before the "norm" key existed must rebuild as the head it was trained as
+    cfg = serve.head_config_from_run({"name": "pointer", "width": 256, "layer": -1})
+    assert cfg["norm"] is False and cfg["layer"] == -1
+    assert serve.head_config_from_run(None) is None

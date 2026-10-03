@@ -43,6 +43,18 @@ def build_answer(qtype: str, options: list[tuple[str, str | None]], probs: np.nd
     raise ValueError(qtype)
 
 
+# Keys that newer head.py versions added to HEAD_CONFIG, with the value they implicitly had before.
+HEAD_CONFIG_LEGACY_DEFAULTS = {"norm": False}
+
+
+def head_config_from_run(saved: dict | None) -> dict | None:
+    """A saved run's head config, completed with the defaults that applied when it was trained,
+    so build_head() does not inherit newer HEAD_CONFIG defaults the checkpoint never had."""
+    if saved is None:
+        return None
+    return {**HEAD_CONFIG_LEGACY_DEFAULTS, **saved}
+
+
 class Decider:
     """Torso (+ optional LoRA) + head + per-type temperatures, loaded once."""
 
@@ -65,7 +77,7 @@ class Decider:
             head_path = head_path or run_dir / "head.pt"
             self.temps.update(cfg.get("temps", {}))
         self.model.eval()
-        self.head = head_mod.build_head(d, len(self.taps), cfg.get("head")).to(device)
+        self.head = head_mod.build_head(d, len(self.taps), head_config_from_run(cfg.get("head"))).to(device)
         if head_path is not None:
             self.head.load_state_dict(torch.load(head_path, map_location=device))
         self.head.eval()

@@ -13,3 +13,5 @@ runs/
 *.arrow
 # secrets
 .env
+# workflow worktrees
+.claude/worktrees/

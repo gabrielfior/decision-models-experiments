@@ -34,3 +34,9 @@ def test_head_overrides_change_only_the_given_keys(monkeypatch):
     train.apply_head_overrides('{"name": "cross_option", "residual_pointer": true}')
     assert train.head_mod.HEAD_CONFIG["name"] == "cross_option" and train.head_mod.HEAD_CONFIG["residual_pointer"] is True
     assert train.head_mod.HEAD_CONFIG["layer"] == 1 and train.head_mod.HEAD_CONFIG["norm"] is True
+
+
+def test_split_plan_defaults_and_final_retrain_mode():
+    assert train.split_plan("train", "dev") == (["train"], "dev", ["heldout"])
+    tr, calib, report = train.split_plan("train,dev", "heldout")
+    assert tr == ["train", "dev"] and calib == "heldout" and report == []

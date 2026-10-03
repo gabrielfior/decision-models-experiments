@@ -56,6 +56,14 @@ def apply_head_overrides(spec: str | None) -> None:
         head_mod.HEAD_CONFIG.update(json.loads(spec))
 
 
+def split_plan(train_splits: str, calib_split: str) -> tuple[list[str], str, list[str]]:
+    """Which splits are trained on, which one fits the temperatures (and is reported as "dev"),
+    and which remaining splits are reported as held-out. Final retrain: --train-splits train,dev --calib-split heldout."""
+    tr = [x for x in train_splits.split(",") if x]
+    report = [x for x in ("train", "dev", "heldout") if x not in tr and x != calib_split]
+    return tr, calib_split, report
+
+
 def head_configs(n_layers: int, depth_heads: bool) -> list[dict]:
     """The exact config of every head this run trains: one per tap for laddered heads, else one.
     Saved to config.json so serve.py rebuilds the head that was trained, not the current default."""
@@ -104,6 +112,8 @@ def main(argv=None):
     ap.add_argument("--depth-heads", action="store_true", help="laddered heads at every tap, summed loss (Needle)")
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--head-cfg", default=None, help='JSON overrides for head.HEAD_CONFIG, e.g. {"name":"cross_option"}')
+    ap.add_argument("--train-splits", default="train", help="comma list of splits to train on (final retrain: train,dev)")
+    ap.add_argument("--calib-split", default="dev", help="split that fits temperatures and is reported as dev")
     args = ap.parse_args(argv)
     apply_head_overrides(args.head_cfg)
     global DEPTH_HEADS, LR
@@ -146,9 +156,11 @@ def main(argv=None):
     torso.train()
     heads.train()
 
-    train_rows = P.load_split("train")[: args.max_rows]
-    dev_rows = P.load_split("dev")
-    heldout_rows = P.load_split("heldout")
+    tr_splits, calib_split, report_splits = split_plan(args.train_splits, args.calib_split)
+    train_rows = [r for sname in tr_splits for r in P.load_split(sname)][: args.max_rows]
+    dev_rows = P.load_split(calib_split)
+    heldout_rows = [r for sname in report_splits for r in P.load_split(sname)]
+    print(f"train on {tr_splits} ({len(train_rows)} rows); calibrate/select on {calib_split} ({len(dev_rows)}); report {report_splits} ({len(heldout_rows)})", flush=True)
 
     lora_params = [p for p in torso.parameters() if p.requires_grad]
     opt = torch.optim.AdamW(
@@ -199,7 +211,7 @@ def main(argv=None):
     temps = P.fit_temperature_by_type(dev_a)
     report = P.evaluate(dev_a, dev_b, predict(heldout_rows, order="identity"), temps)
     report.update(note=args.note, tier="B", seeds=1, train_s=train_s, torso=args.torso, run_dir=str(run_dir),
-                  per_seed=[report["dev_selection"]])
+                  per_seed=[report["dev_selection"]], train_splits=tr_splits, calib_split=calib_split)
     # Tier B gate: same rule as Tier A, against the latest kept Tier B row (single seed -> dev SE binds).
     base = P.read_baseline(tier="B")
     report["baseline"] = base

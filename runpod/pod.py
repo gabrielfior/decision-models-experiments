@@ -106,10 +106,10 @@ def sync(with_cache: bool = True):
     ip, port = ssh_target()
     rsh = f"ssh -i {KEY} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p {port}"
     excludes = ["--exclude", ".venv", "--exclude", "__pycache__", "--exclude", "runs/", "--exclude", ".superpowers", "--exclude", ".env",
-                "--exclude", "data/raw", "--exclude", "jevbench/results", "--exclude", "jevbench/.git"]
+                "--exclude", "data/raw", "--exclude", "jevbench/results", "--exclude", "jevbench/.git", "--exclude", ".claude"]
     if not with_cache:
         excludes += ["--exclude", "data/cache"]
-    subprocess.check_call(["rsync", "-az", "--info=progress2", "-e", rsh, *excludes, f"{ROOT}/", f"root@{ip}:/workspace/decider/"])
+    subprocess.check_call(["rsync", "-az", "--stats", "-e", rsh, *excludes, f"{ROOT}/", f"root@{ip}:/workspace/decider/"])
     print("synced")
 
 

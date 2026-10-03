@@ -44,3 +44,13 @@ def test_saved_head_config_does_not_inherit_newer_defaults():
     cfg = serve.head_config_from_run({"name": "pointer", "width": 256, "layer": -1})
     assert cfg["norm"] is False and cfg["layer"] == -1
     assert serve.head_config_from_run(None) is None
+
+
+def test_canonical_probs_undo_the_option_permutation_and_tta_averages():
+    z = np.array([2.0, 0.0, 1.0])                 # logits in presented order
+    perm = [2, 0, 1]                              # presented position j shows canonical option perm[j]
+    p = serve.canonical_probs(z, perm)
+    assert p.shape == (3,) and abs(p.sum() - 1) < 1e-9
+    assert p[2] > p[1] > p[0]                     # canonical option 2 was shown first with the top logit
+    avg = serve.average_probs([p, np.array([0.2, 0.3, 0.5])])
+    assert abs(avg.sum() - 1) < 1e-9 and np.argmax(avg) == 2

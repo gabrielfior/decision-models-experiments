@@ -69,3 +69,17 @@ def test_baseline_pointer_head_parameter_count_is_two_projections_plus_norm():
     width = head_mod.HEAD_CONFIG["width"]
     norm = 2 * 1024 if head_mod.HEAD_CONFIG.get("norm") else 0
     assert n == 2 * 1024 * width + norm  # W_q and W_k (no biases) + LayerNorm affine
+
+
+def test_cross_option_head_is_selectable_and_keeps_the_contract():
+    torch.manual_seed(0)
+    head = head_mod.build_head(D, L, {"name": "cross_option", "width": 32, "heads": 4, "ffn": 64, "dropout": 0.1, "residual_pointer": True})
+    h_ans, h_opts, mask, labels = _batch()
+    head.eval()
+    logits = head(h_ans, h_opts, mask)
+    assert logits.shape == (B, K) and torch.softmax(logits, -1)[0, 3:].max().item() < 1e-6
+    perm = torch.tensor([2, 0, 4, 1, 3])
+    assert torch.allclose(head(h_ans, h_opts[:, :, perm], mask[:, perm])[1], logits[1][perm], atol=1e-4)
+    assert head_mod.HEAD_CONFIG["name"] == "pointer"          # default head unchanged
+    big = head_mod.build_head(2048, 4, {"name": "cross_option"})
+    assert sum(p.numel() for p in big.parameters()) < 3_000_000

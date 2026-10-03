@@ -28,6 +28,20 @@ import numpy as np
 import prepare as P
 
 
+def canonical_probs(z: np.ndarray, perm: list[int], temperature: float = 1.0) -> np.ndarray:
+    """Softmax of logits given in PRESENTED order, returned in canonical option order (canon[perm[j]] = p_j)."""
+    p = P._softmax(np.asarray(z, dtype=np.float64) / temperature)
+    canon = np.empty_like(p)
+    canon[np.asarray(perm)] = p
+    return canon
+
+
+def average_probs(ps: list[np.ndarray]) -> np.ndarray:
+    """Test-time augmentation: mean of probability vectors from different option orders (renormalised)."""
+    m = np.mean(np.stack(ps), axis=0)
+    return m / m.sum()
+
+
 def build_answer(qtype: str, options: list[tuple[str, str | None]], probs: np.ndarray) -> dict:
     """Map a probability vector over our canonical option order onto the harness's answer shape."""
     p = np.asarray(probs, dtype=np.float64)
@@ -58,7 +72,8 @@ def head_config_from_run(saved: dict | None) -> dict | None:
 class Decider:
     """Torso (+ optional LoRA) + head + per-type temperatures, loaded once."""
 
-    def __init__(self, torso: str, run_dir: Path | None, head_path: Path | None, device: str):
+    def __init__(self, torso: str, run_dir: Path | None, head_path: Path | None, device: str, tta: bool = False):
+        self.tta = tta
         import torch
         import head as head_mod
         import train
@@ -97,10 +112,14 @@ class Decider:
 
     def decide(self, state, question: dict) -> dict:
         row = P.question_to_row(state, question)
-        batch = next(P.batches(self.tok, [row], 1, shuffle_options=False, device=self.device, markers=self.markers))
-        z = self.logits(batch)[0, : row["n_options"]].float().cpu().numpy()
-        probs = P._softmax(z / self.temps.get(row["qtype"], 1.0))
-        return build_answer(row["qtype"], row["options"], probs)
+        T = self.temps.get(row["qtype"], 1.0)
+        orders = ("identity", "reversed") if (self.tta and row["qtype"] == "choice") else ("identity",)
+        ps = []
+        for order in orders:
+            batch = next(P.batches(self.tok, [row], 1, shuffle_options=False, device=self.device, markers=self.markers, order=order))
+            z = self.logits(batch)[0, : row["n_options"]].float().cpu().numpy()
+            ps.append(canonical_probs(z, batch["perm"][0], T))
+        return build_answer(row["qtype"], row["options"], average_probs(ps))
 
 
 def make_handler(decider: Decider, model_name: str):
@@ -137,10 +156,11 @@ def main(argv=None):
     ap.add_argument("--head", default=None, help="a head.pt to use (Tier A head on the frozen torso)")
     ap.add_argument("--port", type=int, default=8811)
     ap.add_argument("--name", default="decider-autoresearch")
+    ap.add_argument("--tta", action="store_true", help="score choice questions under two option orders and average (halves order sensitivity, 2x compute)")
     a = ap.parse_args(argv)
     import torch
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    d = Decider(a.torso, a.run, a.head, device)
+    d = Decider(a.torso, a.run, a.head, device, tta=a.tta)
     print(f"serving {a.name} on http://127.0.0.1:{a.port}/v1/systemone (device {device}, temps {d.temps})", flush=True)
     ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(d, a.name)).serve_forever()
 

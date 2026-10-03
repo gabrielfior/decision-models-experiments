@@ -50,6 +50,12 @@ DEPTH_HEADS = False           # True = laddered heads at every TAP_LAYER, summed
 # --------------------------------------------------------------------------------------
 
 
+def apply_head_overrides(spec: str | None) -> None:
+    """--head-cfg '{"name": "cross_option", "residual_pointer": true}' changes only the given HEAD_CONFIG keys."""
+    if spec:
+        head_mod.HEAD_CONFIG.update(json.loads(spec))
+
+
 def head_configs(n_layers: int, depth_heads: bool) -> list[dict]:
     """The exact config of every head this run trains: one per tap for laddered heads, else one.
     Saved to config.json so serve.py rebuilds the head that was trained, not the current default."""
@@ -97,7 +103,9 @@ def main(argv=None):
     ap.add_argument("--top-half-only", action="store_true", help="adapt only the top half of the layers")
     ap.add_argument("--depth-heads", action="store_true", help="laddered heads at every tap, summed loss (Needle)")
     ap.add_argument("--lr", type=float, default=None)
+    ap.add_argument("--head-cfg", default=None, help='JSON overrides for head.HEAD_CONFIG, e.g. {"name":"cross_option"}')
     args = ap.parse_args(argv)
+    apply_head_overrides(args.head_cfg)
     global DEPTH_HEADS, LR
     if args.rank:
         LORA["r"], LORA["lora_alpha"] = args.rank, 2 * args.rank

@@ -27,3 +27,10 @@ def test_head_configs_record_the_layer_each_depth_head_reads():
     assert [c["layer"] for c in cfgs] == [0, 1, 2, 3]
     single = train.head_configs(n_layers=4, depth_heads=False)
     assert len(single) == 1 and single[0] == dict(train.head_mod.HEAD_CONFIG)
+
+
+def test_head_overrides_change_only_the_given_keys(monkeypatch):
+    monkeypatch.setattr(train.head_mod, "HEAD_CONFIG", dict(train.head_mod.HEAD_CONFIG))
+    train.apply_head_overrides('{"name": "cross_option", "residual_pointer": true}')
+    assert train.head_mod.HEAD_CONFIG["name"] == "cross_option" and train.head_mod.HEAD_CONFIG["residual_pointer"] is True
+    assert train.head_mod.HEAD_CONFIG["layer"] == 1 and train.head_mod.HEAD_CONFIG["norm"] is True

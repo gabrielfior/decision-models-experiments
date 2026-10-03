@@ -35,9 +35,14 @@ image = (
         "huggingface-hub>=0.30", "safetensors>=0.4", "numpy>=2.0",
     )
     .env({"HF_HOME": f"{V}/hf", "DECIDER_DATA": f"{V}/data", "DECIDER_CACHE": f"{V}/cache",
-          "DECIDER_RUNS": f"{V}/runs", "TOKENIZERS_PARALLELISM": "false"})
+          "DECIDER_RUNS": f"{V}/runs", "DECIDER_RESULTS": f"{V}/runs/results.tsv", "TOKENIZERS_PARALLELISM": "false"})
     .add_local_python_source("prepare", "head", "train")
+    .add_local_dir("data/splits", remote_path="/root/data/splits")   # the committed row ids
 )
+
+
+def _commit() -> str:
+    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"]).decode().strip()
 
 app = modal.App(APP, image=image)
 
@@ -52,14 +57,16 @@ def _guard():
 
 
 @app.function(gpu=GPU, volumes={V: VOL}, timeout=2 * 3600)
-def _cache(torso: str):
+def _cache(torso: str, commit: str, batch_size: int = 16):
+    os.environ["DECIDER_COMMIT"] = commit
     import prepare as P
-    P.cache_features(torso)
+    P.cache_features(torso, batch_size=batch_size)
     VOL.commit()
 
 
 @app.function(gpu=GPU, volumes={V: VOL}, timeout=3 * 3600)
-def _train(argv: list[str]):
+def _train(argv: list[str], commit: str):
+    os.environ["DECIDER_COMMIT"] = commit
     import train
     train.main(argv)
     VOL.commit()
@@ -78,9 +85,9 @@ def data():
 
 
 @app.local_entrypoint()
-def cache(torso: str = "Qwen/Qwen3.5-0.8B-Base"):
+def cache(torso: str = "Qwen/Qwen3.5-0.8B-Base", batch_size: int = 16):
     _guard()
-    _cache.remote(torso)
+    _cache.remote(torso, _commit(), batch_size)
 
 
 @app.local_entrypoint()
@@ -89,4 +96,4 @@ def train_lora(note: str, seed: int = 0, max_rows: int = 0):
     argv = ["--note", note, "--seed", str(seed), "--out", f"{V}/runs/{note[:40].replace(' ', '_')}-s{seed}"]
     if max_rows:
         argv += ["--max-rows", str(max_rows)]
-    _train.remote(argv)
+    _train.remote(argv, _commit())

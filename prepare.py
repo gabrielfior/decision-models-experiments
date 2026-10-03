@@ -63,7 +63,7 @@ ROOT = Path(__file__).resolve().parent
 DATA_RAW = ROOT / "data" / "raw"
 DATA_SPLITS = ROOT / "data" / "splits"     # committed: row ids only
 DATA_CACHE = ROOT / "data" / "cache"
-RESULTS_TSV = ROOT / "results.tsv"
+RESULTS_TSV = Path(__import__("os").environ.get("DECIDER_RESULTS", ROOT / "results.tsv"))
 
 
 # ----------------------------------------------------------------------------
@@ -335,7 +335,8 @@ def option_text(qtype: str, key: str, desc: str | None) -> str:
     return f"{key}: {desc}" if desc else key
 
 
-def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = False, rng=None) -> dict:
+def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = False, rng=None,
+               order: str = "identity") -> dict:
     """Tokenise one row as  <state> s </state>?  — see the layout note next to QWEN_MARKERS.
 
         [state] s_1..s_n [q] i_1..i_m ([opt] o_1..o_k [opt_end])*N [decide]
@@ -348,9 +349,12 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
     m = {k: tok.convert_tokens_to_ids(v) for k, v in markers.items()}
     n = row["n_options"]
     perm = list(range(n))
-    if shuffle and row["qtype"] == "choice":
-        rng = rng or np.random.default_rng()
-        perm = [int(i) for i in rng.permutation(n)]
+    if row["qtype"] == "choice":
+        if shuffle:
+            rng = rng or np.random.default_rng()
+            perm = [int(i) for i in rng.permutation(n)]
+        elif order == "reversed":
+            perm = perm[::-1]
     label = perm.index(row["label"])
 
     state_ids = tok.encode(row["state"], add_special_tokens=False)[:MAX_STATE_TOKENS]
@@ -376,15 +380,352 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
 
 
 # ----------------------------------------------------------------------------
+# 5. torso, batching, prediction, calibration, reporting
+# ----------------------------------------------------------------------------
+def load_torso(name: str, dtype=None, device: str = "cpu"):
+    """Load a torso WITHOUT its language-model head: AutoModel gives the bare stack of layers.
+
+    Qwen3.5 base checkpoints are multimodal; we keep only the text stack (`language_model`).
+    Returns (tokenizer, model, d_model).
+    """
+    import torch
+    from transformers import AutoModel, AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(name)
+    model = AutoModel.from_pretrained(name, dtype=dtype or torch.float32)
+    model = getattr(model, "language_model", model)
+    model.to(device)
+    cfg = getattr(model.config, "text_config", model.config)
+    return tok, model, int(cfg.hidden_size)
+
+
+def batches(tok, rows: list[dict], batch_size: int, shuffle_options: bool, rng=None, device: str = "cpu",
+            order: str = "identity", shuffle_rows: bool = False):
+    """Encode rows and yield right-padded tensor batches with the read-out positions."""
+    import torch
+    idx = list(range(len(rows)))
+    if shuffle_rows:
+        (rng or np.random.default_rng()).shuffle(idx)
+    pad_id = getattr(tok, "pad_token_id", None) or 0
+    for start in range(0, len(idx), batch_size):
+        encs = [encode_row(tok, rows[i], shuffle=shuffle_options, rng=rng, order=order) for i in idx[start:start + batch_size]]
+        B, T, K = len(encs), max(len(e["ids"]) for e in encs), max(e["n_options"] for e in encs)
+        ids = torch.full((B, T), pad_id, dtype=torch.long)
+        attn = torch.zeros((B, T), dtype=torch.long)
+        opt_pos = torch.full((B, K), -1, dtype=torch.long)
+        for i, e in enumerate(encs):
+            ids[i, : len(e["ids"])] = torch.tensor(e["ids"])
+            attn[i, : len(e["ids"])] = 1
+            opt_pos[i, : e["n_options"]] = torch.tensor(e["opt_pos"])
+        yield {
+            "ids": ids.to(device), "attn": attn.to(device),
+            "decide_pos": torch.tensor([e["decide_pos"] for e in encs], device=device),
+            "opt_pos": opt_pos.to(device), "opt_mask": (opt_pos >= 0).to(device),
+            "label": torch.tensor([e["label"] for e in encs], device=device),
+            "qtype": [e["qtype"] for e in encs], "n_options": [e["n_options"] for e in encs],
+            "perm": [e["perm"] for e in encs], "id": [e["id"] for e in encs],
+        }
+
+
+def predict_rows(logit_fn, tok, rows: list[dict], order: str = "identity", device: str = "cpu", batch_size: int = 16) -> list[dict]:
+    """Run `logit_fn(batch) -> [B, K]` over rows; return logits mapped back to CANONICAL option order.
+
+    Mapping back lets two runs under different option orders be compared row by row.
+    Each prediction also carries the wall-clock cost of its batch, split per row, in ms.
+    """
+    import time
+    import torch
+    preds = []
+    with torch.no_grad():
+        for b in batches(tok, rows, batch_size, shuffle_options=False, order=order, device=device):
+            t0 = time.perf_counter()
+            z = logit_fn(b).float().cpu().numpy()
+            ms = (time.perf_counter() - t0) * 1000 / len(b["id"])
+            for i, (perm, n) in enumerate(zip(b["perm"], b["n_options"])):
+                canon = np.empty(n)
+                canon[perm] = z[i, :n]                     # canon[perm[j]] = z_j
+                preds.append({"logits": canon, "label": int(perm[int(b["label"][i])]), "qtype": b["qtype"][i],
+                              "n_options": n, "id": b["id"][i], "ms": ms})
+    return preds
+
+
+def _softmax(z):
+    z = np.asarray(z, dtype=np.float64)
+    z = z - z.max()
+    e = np.exp(z)
+    return e / e.sum()
+
+
+def probs_from(preds: list[dict], temps: dict[str, float]) -> list[np.ndarray]:
+    """Boltzmann distribution over options, p_i ∝ exp(z_i / T) with T per question type."""
+    return [_softmax(np.asarray(p["logits"]) / temps.get(p["qtype"], 1.0)) for p in preds]
+
+
+def fit_temperature_by_type(preds: list[dict], log_t_range=(math.log(0.05), math.log(20.0)), n_grid: int = 400) -> dict[str, float]:
+    """Per question type, the T that minimises log loss on these predictions. One scalar each."""
+    temps = {}
+    grid = np.exp(np.linspace(*log_t_range, n_grid))
+    for t in QTYPES:
+        sub = [p for p in preds if p["qtype"] == t]
+        if not sub:
+            continue
+        best_T, best_nll = 1.0, float("inf")
+        for T in grid:
+            nll = 0.0
+            for p in sub:
+                pr = _softmax(np.asarray(p["logits"]) / T)
+                nll -= math.log(max(pr[p["label"]], 1e-12))
+            if nll < best_nll:
+                best_T, best_nll = float(T), nll
+        temps[t] = best_T
+    return temps
+
+
+def score_preds(preds: list[dict], temps: dict[str, float]) -> dict:
+    """Pad per-row probability vectors into the [N, K_max] matrix score() wants."""
+    if not preds:
+        return {}
+    probs = probs_from(preds, temps)
+    K = max(p["n_options"] for p in preds)
+    mat = np.zeros((len(preds), K))
+    for i, pr in enumerate(probs):
+        mat[i, : len(pr)] = pr
+    return score(mat, [p["label"] for p in preds], [p["qtype"] for p in preds], [p["n_options"] for p in preds])
+
+
+def evaluate(dev_a: list[dict], dev_b: list[dict], heldout: list[dict], temps: dict[str, float]) -> dict:
+    """The report every experiment produces: dev under order A (selection), order sensitivity
+    between orders A and B, held-out families (reported only), and latency."""
+    dev = score_preds(dev_a, temps)
+    held = score_preds(heldout, temps)
+    flips = [int(np.argmax(a["logits"]) != np.argmax(b["logits"])) for a, b in zip(dev_a, dev_b)]
+    ms = [p.get("ms", float("nan")) for p in dev_a]
+    return {
+        "dev_selection": dev["selection"], "dev_se": dev["selection_se"], "dev_acc": dev["accuracy"],
+        "dev_brier": dev["brier"], "dev_ece": dev["ece"],
+        "heldout_acc": held.get("accuracy", float("nan")), "heldout_brier": held.get("brier", float("nan")),
+        "order_sens": float(np.mean(flips)) if flips else float("nan"),
+        "p50_ms": float(np.nanmedian(ms)) if ms else float("nan"),
+        "temps": temps, "dev": dev, "heldout": held,
+    }
+
+
+RESULT_COLUMNS = ["timestamp", "commit", "tier", "note", "seeds", "dev_selection", "dev_se", "dev_acc", "dev_brier",
+                  "dev_ece", "heldout_acc", "heldout_brier", "order_sens", "p50_ms", "kept"]
+
+
+def git_commit() -> str:
+    import subprocess
+    try:
+        return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, stderr=subprocess.DEVNULL).decode().strip()
+    except Exception:
+        return "nogit"
+
+
+def append_results(rep: dict, path: Path = RESULTS_TSV, commit: str | None = None) -> None:
+    import time
+    path = Path(path)
+    import os
+    row = {"timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"), "commit": commit or os.environ.get("DECIDER_COMMIT") or git_commit(), **rep}
+    header = not path.exists() or path.stat().st_size == 0
+    with open(path, "a") as f:
+        if header:
+            f.write("\t".join(RESULT_COLUMNS) + "\n")
+        f.write("\t".join(_fmt(row.get(c, "")) for c in RESULT_COLUMNS) + "\n")
+
+
+def _fmt(v) -> str:
+    if isinstance(v, float):
+        return f"{v:.4f}"
+    return str(v).replace("\t", " ").replace("\n", " ")
+
+
+def read_baseline(path: Path = RESULTS_TSV, tier: str = "A") -> float | None:
+    """The dev selection score of the most recent KEPT experiment of this tier, or None."""
+    path = Path(path)
+    if not path.exists():
+        return None
+    import csv
+    kept = [r for r in csv.DictReader(open(path), delimiter="\t") if r["tier"] == tier and r["kept"] == "True"]
+    return float(kept[-1]["dev_selection"]) if kept else None
+
+
+# ----------------------------------------------------------------------------
+# 5b. feature cache
+# ----------------------------------------------------------------------------
+def cache_dir() -> Path:
+    import os
+    return Path(os.environ.get("DECIDER_CACHE", DATA_CACHE))
+
+
+def cache_features(torso_name: str, splits=("train", "dev", "heldout"), batch_size: int = 16, device: str | None = None,
+                   out_dir: Path | None = None) -> None:
+    """Run the frozen torso once over every split and save the read-out vectors at TAP_LAYERS.
+
+    Saved per split as .npz, float16, option vectors ragged with `offsets`:
+        h_ans   [N, L, d]          state at <decide>
+        h_opts  [sum_i n_i, L, d]  state at each </opt>, rows of question i at offsets[i]:offsets[i+1]
+        offsets, labels, qtypes, n_options, ids, d_model
+    Option order is the canonical one. This is the measurement step of the plan: a few
+    observables taken from a large state, after which the torso leaves the loop.
+    """
+    import time
+    import torch
+    device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+    out_dir = Path(out_dir or cache_dir() / torso_name.split("/")[-1])
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tok, model, d = load_torso(torso_name, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device=device)
+    model.eval()
+    for split in splits:
+        rows = load_split(split)
+        h_ans, h_opts, labels, qtypes, n_opts, ids = [], [], [], [], [], []
+        t0 = time.time()
+        with torch.no_grad():
+            for bi, b in enumerate(batches(tok, rows, batch_size, shuffle_options=False, device=device)):
+                out = model(input_ids=b["ids"], attention_mask=b["attn"], output_hidden_states=True)
+                hs = torch.stack([out.hidden_states[l] for l in TAP_LAYERS], dim=1)      # [B, L, T, d]
+                ar = torch.arange(hs.shape[0], device=device)
+                h_ans.append(hs[ar, :, b["decide_pos"]].to(torch.float16).cpu().numpy())
+                for i, n in enumerate(b["n_options"]):
+                    h_opts.append(hs[i][:, b["opt_pos"][i, :n]].permute(1, 0, 2).to(torch.float16).cpu().numpy())
+                labels += b["label"].tolist(); qtypes += b["qtype"]; n_opts += b["n_options"]; ids += b["id"]
+                if bi % 50 == 0:
+                    print(f"{split}: {len(ids)}/{len(rows)} rows, {time.time() - t0:.0f}s", flush=True)
+        n_opts = np.array(n_opts)
+        np.savez(out_dir / f"{split}.npz", h_ans=np.concatenate(h_ans), h_opts=np.concatenate(h_opts),
+                 offsets=np.concatenate([[0], np.cumsum(n_opts)]), labels=np.array(labels), qtypes=np.array(qtypes),
+                 n_options=n_opts, ids=np.array(ids), d_model=d)
+        print(f"{split}: wrote {len(ids)} rows in {time.time() - t0:.0f}s -> {out_dir / (split + '.npz')}", flush=True)
+
+
+# ----------------------------------------------------------------------------
+# 6. Tier A trainer
+# ----------------------------------------------------------------------------
+def _load_cache(path: Path):
+    z = np.load(path, allow_pickle=False)
+    return {k: z[k] for k in z.files}
+
+
+def _cache_batches(c, idx, rng, device, shuffle_options: bool, order: str = "identity"):
+    """Yield padded (h_ans [B,L,d], h_opts [B,L,K,d], mask, label) from a ragged cache.
+
+    Rows are bucketed by option count so a 77-option row never pads a 2-option batch.
+    With shuffle_options the option VECTORS of choice rows are permuted along with the
+    label: an augmentation that stops a head from reading the label's position. (The true
+    order sensitivity, where the torso re-reads the options, is measured in Tier B.)
+    """
+    import torch
+    L, d = c["h_ans"].shape[1:]
+    for b_idx in idx:
+        K = int(c["n_options"][b_idx].max())
+        B = len(b_idx)
+        ha = torch.from_numpy(c["h_ans"][b_idx].astype(np.float32)).to(device)
+        ho = torch.zeros((B, L, K, d), device=device)
+        mask = torch.zeros((B, K), dtype=torch.bool, device=device)
+        lab = torch.zeros(B, dtype=torch.long, device=device)
+        for j, i in enumerate(b_idx):
+            n = int(c["n_options"][i]); o0 = int(c["offsets"][i])
+            perm = np.arange(n)
+            if c["qtypes"][i] == "choice":
+                if shuffle_options:
+                    perm = rng.permutation(n)
+                elif order == "reversed":
+                    perm = perm[::-1]
+            vecs = c["h_opts"][o0:o0 + n].astype(np.float32)[perm]          # [n, L, d]
+            ho[j, :, :n] = torch.from_numpy(vecs).permute(1, 0, 2).to(device)
+            mask[j, :n] = True
+            lab[j] = int(np.where(perm == c["labels"][i])[0][0])
+        yield ha, ho, mask, lab, b_idx
+
+
+def _bucketed_indices(n_options: np.ndarray, batch_size: int, rng, shuffle: bool) -> list[np.ndarray]:
+    order = np.argsort(n_options, kind="stable")
+    chunks = [order[i:i + batch_size] for i in range(0, len(order), batch_size)]
+    if shuffle:
+        rng.shuffle(chunks)
+    return chunks
+
+
+def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-Base", seeds=tuple(range(N_SEEDS)),
+           epochs: int = 20, batch_size: int = 128, lr: float = 1e-3, weight_decay: float = 0.01, note: str = "",
+           results_path: Path = RESULTS_TSV, baseline="auto", device: str = "cpu") -> dict:
+    """Train head_mod.build_head on the cached read-out vectors, one run per seed, and gate it.
+
+    Returns the aggregated report (means over seeds) with `kept` decided by keep() against the
+    most recent kept Tier A result in results.tsv (baseline="auto"), a number, or None (= keep).
+    """
+    import torch
+    cdir = Path(cache_dir or (globals()["cache_dir"]() / torso))
+    train, dev, held = (_load_cache(cdir / f"{s}.npz") for s in ("train", "dev", "heldout"))
+    d, L = int(train["d_model"]), train["h_ans"].shape[1]
+    reports = []
+    for seed in seeds:
+        torch.manual_seed(seed)
+        rng = np.random.default_rng(seed)
+        head = head_mod.build_head(d, L).to(device)
+        opt = torch.optim.AdamW(head.parameters(), lr=lr, weight_decay=weight_decay)
+        for _ in range(epochs):
+            head.train()
+            for ha, ho, mask, lab, _ in _cache_batches(train, _bucketed_indices(train["n_options"], batch_size, rng, True), rng, device, True):
+                loss = head.loss(head(ha, ho, mask), lab)
+                opt.zero_grad(set_to_none=True)
+                loss.backward()
+                opt.step()
+        head.eval()
+
+        def predict(c, order):
+            preds = [None] * len(c["labels"])
+            with torch.no_grad():
+                for ha, ho, mask, lab, b_idx in _cache_batches(c, _bucketed_indices(c["n_options"], 256, rng, False), rng, device, False, order):
+                    z = head(ha, ho, mask).float().cpu().numpy()
+                    for j, i in enumerate(b_idx):
+                        n = int(c["n_options"][i]); zi = z[j, :n]
+                        if order == "reversed" and c["qtypes"][i] == "choice":
+                            zi = zi[::-1]
+                        preds[i] = {"logits": zi.copy(), "label": int(c["labels"][i]), "qtype": str(c["qtypes"][i]), "n_options": n, "id": str(c["ids"][i])}
+            return preds
+
+        dev_a, dev_b, held_p = predict(dev, "identity"), predict(dev, "reversed"), predict(held, "identity")
+        temps = fit_temperature_by_type(dev_a)
+        reports.append(evaluate(dev_a, dev_b, held_p, temps))
+
+    agg = {k: float(np.mean([r[k] for r in reports])) for k in ("dev_selection", "dev_se", "dev_acc", "dev_brier", "dev_ece", "heldout_acc", "heldout_brier", "order_sens")}
+    agg.update(p50_ms=float("nan"), tier="A", note=note, seeds=len(reports), per_seed=[r["dev_selection"] for r in reports],
+               temps=reports[-1]["temps"], head=dict(head_mod.HEAD_CONFIG))
+    base = read_baseline(results_path) if baseline == "auto" else baseline
+    agg["baseline"] = base
+    agg["kept"] = True if base is None else keep([base], agg["per_seed"], agg["dev_se"])
+    append_results(agg, path=results_path)
+    verdict = "KEEP" if agg["kept"] else "DISCARD"
+    print(f"{verdict}: dev selection {agg['dev_selection']:.4f} ± {agg['dev_se']:.4f} (per seed {['%.4f' % s for s in agg['per_seed']]})"
+          f" vs baseline {base}; acc {agg['dev_acc']:.3f} brier {agg['dev_brier']:.3f} ece {agg['dev_ece']:.3f}"
+          f" heldout acc {agg['heldout_acc']:.3f} order_sens {agg['order_sens']:.3f}")
+    return agg
+
+
+# ----------------------------------------------------------------------------
 # 7. CLI
 # ----------------------------------------------------------------------------
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("data", help="download the corpus and write the fixed split ids (step 2)")
-    sub.add_parser("cache", help="cache read-out hidden states for TAP_LAYERS (step 4)")
-    sub.add_parser("tier-a", help="train head.py on the cache with N_SEEDS seeds and append results.tsv")
+    c = sub.add_parser("cache", help="cache read-out hidden states for TAP_LAYERS (step 4)")
+    c.add_argument("--torso", default="Qwen/Qwen3.5-0.8B-Base")
+    c.add_argument("--batch-size", type=int, default=16)
+    c.add_argument("--splits", default="train,dev,heldout")
+    a = sub.add_parser("tier-a", help="train head.py on the cache with N_SEEDS seeds and append results.tsv")
+    a.add_argument("--note", required=True)
+    a.add_argument("--torso", default="Qwen3.5-0.8B-Base")
+    a.add_argument("--epochs", type=int, default=20)
+    a.add_argument("--no-gate", action="store_true", help="record without comparing to a baseline")
     args = ap.parse_args(argv)
+    if args.cmd == "cache":
+        cache_features(args.torso, splits=tuple(args.splits.split(",")), batch_size=args.batch_size)
+        return
+    if args.cmd == "tier-a":
+        import head as head_mod
+        tier_a(head_mod, torso=args.torso, epochs=args.epochs, note=args.note, baseline=None if args.no_gate else "auto")
+        return
     if args.cmd == "data":
         raw = download_corpus()
         rows = flatten(load_records(raw))

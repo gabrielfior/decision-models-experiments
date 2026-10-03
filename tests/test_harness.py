@@ -112,3 +112,12 @@ def test_tier_a_trains_head_on_cache_and_beats_chance(tmp_path):
     assert rep["seeds"] == 2 and rep["dev_acc"] > 0.8
     assert rep["kept"] is True                      # no baseline: the first result is always kept
     assert (tmp_path / "r.tsv").exists()
+
+
+def test_read_baseline_can_pin_a_kept_row_by_note_substring(tmp_path):
+    path = tmp_path / "r.tsv"
+    for note, sel, seeds in (("plain pointer", 0.28, [0.3, 0.29, 0.25]), ("LN pointer layer 16", 0.44, [0.42, 0.45, 0.44]), ("later thing", 0.46, [0.46, 0.46, 0.46])):
+        P.append_results({"tier": "A", "note": note, "seeds": 3, "dev_selection": sel, "kept": True, "per_seed": seeds}, path=path, commit="x")
+    assert P.read_baseline(path) == [0.46, 0.46, 0.46]
+    assert P.read_baseline(path, match="LN pointer") == [0.42, 0.45, 0.44]
+    assert P.read_baseline(path, match="nope") is None

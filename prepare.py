@@ -586,14 +586,17 @@ def _fmt(v) -> str:
     return str(v).replace("\t", " ").replace("\n", " ")
 
 
-def read_baseline(path: Path = RESULTS_TSV, tier: str = "A") -> list[float] | None:
+def read_baseline(path: Path = RESULTS_TSV, tier: str = "A", match: str | None = None) -> list[float] | None:
     """Per-seed dev selection scores of the most recent KEPT experiment of this tier, or None.
+    With `match`, the most recent kept row whose note contains that substring (a pinned baseline,
+    so a lane of variants is always compared with the same reference instead of its own last keep).
     Falls back to the single mean when the row predates per-seed logging."""
     path = Path(path)
     if not path.exists():
         return None
     import csv
-    kept = [r for r in csv.DictReader(open(path), delimiter="\t") if r["tier"] == tier and r["kept"] == "True"]
+    kept = [r for r in csv.DictReader(open(path), delimiter="\t") if r["tier"] == tier and r["kept"] == "True"
+            and (match is None or match in r["note"])]
     if not kept:
         return None
     per_seed = kept[-1].get("per_seed", "")
@@ -700,7 +703,7 @@ def _bucketed_indices(n_options: np.ndarray, batch_size: int, rng, shuffle: bool
 
 def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-Base", seeds=tuple(range(N_SEEDS)),
            epochs: int = 20, batch_size: int = 128, lr: float = 1e-3, weight_decay: float = 0.01, note: str = "",
-           results_path: Path = RESULTS_TSV, baseline="auto", device: str = "cpu") -> dict:
+           results_path: Path = RESULTS_TSV, baseline="auto", device: str = "cpu", baseline_match: str | None = None) -> dict:
     """Train head_mod.build_head on the cached read-out vectors, one run per seed, and gate it.
 
     Returns the aggregated report (means over seeds) with `kept` decided by keep() against the
@@ -744,7 +747,7 @@ def tier_a(head_mod, cache_dir: Path | None = None, torso: str = "Qwen3.5-0.8B-B
     agg = {k: float(np.mean([r[k] for r in reports])) for k in ("dev_selection", "dev_se", "dev_acc", "dev_brier", "dev_ece", "heldout_acc", "heldout_brier", "order_sens")}
     agg.update(p50_ms=float("nan"), tier="A", note=note, seeds=len(reports), per_seed=[r["dev_selection"] for r in reports],
                temps=reports[-1]["temps"], head=dict(head_mod.HEAD_CONFIG))
-    base = read_baseline(results_path) if baseline == "auto" else baseline
+    base = read_baseline(results_path, match=baseline_match) if baseline == "auto" else baseline
     if isinstance(base, (int, float)):
         base = [float(base)]
     agg["baseline"] = base
@@ -775,6 +778,7 @@ def main(argv=None):
     a.add_argument("--epochs", type=int, default=20)
     a.add_argument("--no-gate", action="store_true", help="record without comparing to a baseline")
     a.add_argument("--seeds", default=",".join(str(i) for i in range(N_SEEDS)), help="comma-separated seeds, e.g. 3,4,5 for a replication")
+    a.add_argument("--baseline", default=None, help="pin the gate to the latest KEPT row whose note contains this substring")
     args = ap.parse_args(argv)
     if args.cmd == "cache":
         cache_features(args.torso, splits=tuple(args.splits.split(",")), batch_size=args.batch_size)
@@ -782,7 +786,7 @@ def main(argv=None):
     if args.cmd == "tier-a":
         import head as head_mod
         tier_a(head_mod, torso=args.torso, epochs=args.epochs, note=args.note, baseline=None if args.no_gate else "auto",
-               seeds=tuple(int(x) for x in args.seeds.split(",")))
+               seeds=tuple(int(x) for x in args.seeds.split(",")), baseline_match=args.baseline)
         return
     if args.cmd == "data":
         raw = download_corpus()

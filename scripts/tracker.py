@@ -113,31 +113,50 @@ def panel(rows, title, lo, hi, show_legend):
     return f'<figure><svg viewBox="0 0 {W} {H}" role="img" aria-label="{html.escape(title)}">{"".join(g)}</svg>{legend}</figure>'
 
 
-def jev_panel(j):
+# Reference scores on JevBench public. "exact" = that system's own public-231 run; "est" = leaderboard tier
+# accuracies (public + sealed items) re-weighted to the public tier mix 48/72/111, so ±0.02 is plausible.
+REFERENCES = [
+    {"label": "Strands Decider 2B v19 (AWS)", "acc": 0.723, "kind": "exact", "note": "167/231, strands-decider evaluation/jevbench.md"},
+    {"label": "Kev 0.8B (Jared Palmer)", "acc": 0.636, "kind": "exact", "note": "147/231, kev runs/jevbench-public"},
+    {"label": "GPT-6 Luna, medium reasoning (LLM baseline)", "acc": 0.993, "kind": "est", "note": "JevBench v1.4.2 leaderboard tiers"},
+    {"label": "Gemini 3.1 Flash-Lite (LLM baseline)", "acc": 0.877, "kind": "est", "note": "JevBench v1.4.2 leaderboard tiers"},
+    {"label": "Mapika decider-4b v2", "acc": 0.833, "kind": "est", "note": "JevBench v1.4.2 leaderboard tiers"},
+    {"label": "Kev 8B (research preview)", "acc": 0.724, "kind": "est", "note": "JevBench v1.4.2 leaderboard tiers"},
+    {"label": "Mapika decider-2b", "acc": 0.701, "kind": "est", "note": "JevBench v1.4.2 leaderboard tiers"},
+    {"label": "Kev 4B (research preview)", "acc": 0.697, "kind": "est", "note": "JevBench v1.4.2 leaderboard tiers"},
+    {"label": "Laya (ModernBERT-large 421M)", "acc": 0.587, "kind": "est", "note": "JevBench v1.4.2 leaderboard tiers"},
+]
+TARGET = 0.723
+
+
+def jev_panel(j, refs=REFERENCES, target=TARGET):
     if not j:
         return ""
-    j = sorted(j, key=lambda r: r["acc"])
-    refs = [("Kev 0.8B (published)", 0.636), ("Strands 2B (published)", 0.723)]
-    rowh, top = 26, 28
-    h = top + rowh * len(j) + 40
-    g = []
+    ours = [{"label": LABELS.get(r["run"], r["run"]), "acc": r["acc"], "ours": True,
+             "tip": f'{LABELS.get(r["run"], r["run"])}: {r["n"]}/231 = {r["acc"]:.3f} · hard {r["hard"]} · Brier {r["brier"]:.3f}', "val": f'{r["n"]}/231 · {r["acc"]:.3f}'} for r in j]
+    theirs = [{"label": r["label"], "acc": r["acc"], "ours": False, "tip": f'{r["label"]}: {r["acc"]:.3f} ({r["kind"]}) · {r["note"]}',
+               "val": f'{r["acc"]:.3f}' + ("" if r["kind"] == "exact" else " est.")} for r in refs]
+    rows = sorted(ours + theirs, key=lambda r: -r["acc"])
+    rowh, top, left, right = 30, 34, 300, 24
+    h = top + rowh * len(rows) + 46
+    lo, hi = 0.30, 1.00
     def x(v):
-        return 230 + (W - 230 - 16) * (v - 0.3) / (0.8 - 0.3)
-    for t in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8):
-        g.append(f'<line x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{top}" y2="{h - 36}" class="grid"/>')
-        g.append(f'<text x="{x(t):.1f}" y="{h - 20}" class="tick" text-anchor="middle">{t:.1f}</text>')
-    for name, v in refs:
-        g.append(f'<line x1="{x(v):.1f}" x2="{x(v):.1f}" y1="{top - 6}" y2="{h - 36}" class="ref"/>')
-        g.append(f'<text x="{x(v) + 4:.1f}" y="{top - 10}" class="tick">{html.escape(name)} {v:.3f}</text>')
-    for i, r in enumerate(j):
+        return left + (W - left - right) * (v - lo) / (hi - lo)
+    g = []
+    for t in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0):
+        g.append(f'<line x1="{x(t):.1f}" x2="{x(t):.1f}" y1="{top - 6}" y2="{h - 40}" class="grid"/>')
+        g.append(f'<text x="{x(t):.1f}" y="{h - 22}" class="tick" text-anchor="middle">{t:.1f}</text>')
+    g.append(f'<line x1="{x(target):.1f}" x2="{x(target):.1f}" y1="{top - 14}" y2="{h - 40}" class="target"/>')
+    g.append(f'<text x="{x(target) + 5:.1f}" y="{top - 16}" class="lbl">goal: beat {target:.3f}</text>')
+    for i, r in enumerate(rows):
         y = top + rowh * i
-        label = LABELS.get(r["run"], r["run"])
-        tip = html.escape(f'{label}: {r["n"]}/231 = {r["acc"]:.3f}, hard {r["hard"]}, Brier {r["brier"]:.3f}', quote=True)
-        g.append(f'<text x="222" y="{y + 16}" class="lbl" text-anchor="end">{html.escape(label)}</text>')
-        g.append(f'<rect x="{x(0.3):.1f}" y="{y + 4}" width="{x(r["acc"]) - x(0.3):.1f}" height="16" rx="3" class="bar" data-tip="{tip}"/>')
-        g.append(f'<text x="{x(r["acc"]) + 6:.1f}" y="{y + 16}" class="val">{r["n"]}/231</text>')
-    g.append(f'<text x="222" y="16" class="title" text-anchor="end">JevBench public accuracy</text>')
-    return f'<figure><svg viewBox="0 0 {W} {h}" role="img" aria-label="JevBench public accuracy per scored model">{"".join(g)}</svg></figure>'
+        cls = "bar ours" if r["ours"] else "bar ref"
+        g.append(f'<text x="{left - 10}" y="{y + 18}" class="rowlbl{"" if r["ours"] else " muted"}" text-anchor="end">{html.escape(r["label"])}</text>')
+        g.append(f'<rect x="{x(lo):.1f}" y="{y + 5}" width="{max(x(r["acc"]) - x(lo), 1):.1f}" height="18" rx="3" class="{cls}" data-tip="{html.escape(r["tip"], quote=True)}"/>')
+        g.append(f'<text x="{x(r["acc"]) + 6:.1f}" y="{y + 18}" class="val">{html.escape(r["val"])}</text>')
+    g.append(f'<text x="{left - 10}" y="18" class="title" text-anchor="end">accuracy on the 231 public decisions</text>')
+    legend = '<div class="legend"><span><i class="sw ours"></i>this repo</span><span><i class="sw ref"></i>published / leaderboard (est. = tier accuracies re-weighted to the public mix)</span><span><i class="sw dash"></i>goal</span></div>'
+    return f'<figure><svg viewBox="0 0 {W} {h}" role="img" aria-label="JevBench public accuracy, ranked, with reference systems">{"".join(g)}</svg>{legend}</figure>'
 
 
 # ---------------------------------------------------------------- page
@@ -178,7 +197,9 @@ page = f'''<title>Decider Research Tracker</title>
   .tick {{ font-size:11px; fill:var(--muted); }} .title {{ font-size:13px; font-weight:600; fill:var(--fg); }} .lbl {{ font-size:11px; fill:var(--fg2); }} .val {{ font-size:11px; fill:var(--fg); font-variant-numeric:tabular-nums; }}
   .best {{ fill:none; stroke:var(--fg); stroke-width:2; stroke-linejoin:round; }}
   .pt.kept {{ fill:var(--kept); stroke:var(--surface); stroke-width:2; }} .pt.disc {{ fill:var(--surface); stroke:var(--disc); stroke-width:2; }}
-  .bar {{ fill:var(--kept); }} .hit {{ fill:transparent; }} .hit:hover + * , .pt:hover {{ filter:brightness(1.15); }}
+  .bar.ours {{ fill:var(--kept); }} .bar.ref {{ fill:var(--muted); opacity:.55; }} .target {{ stroke:var(--fg); stroke-width:1.5; stroke-dasharray:5 4; }}
+  .rowlbl {{ font-size:12px; fill:var(--fg); }} .rowlbl.muted {{ fill:var(--fg2); }} .hit {{ fill:transparent; }} .hit:hover + * , .pt:hover {{ filter:brightness(1.15); }}
+  .sw.ours {{ background:var(--kept); border-radius:2px; }} .sw.ref {{ background:var(--muted); opacity:.55; border-radius:2px; }} .sw.dash {{ border-radius:0; height:0; width:14px; border-top:2px dashed var(--fg); vertical-align:3px; background:none; }}
   .legend {{ display:flex; flex-wrap:wrap; gap:16px; font-size:12px; color:var(--fg2); padding:6px 8px 4px; }}
   .sw {{ display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:-1px; }}
   .sw.kept {{ background:var(--kept); }} .sw.disc {{ background:var(--surface); border:2px solid var(--disc); }} .sw.line {{ border-radius:0; height:2px; width:14px; background:var(--fg); vertical-align:3px; }}
@@ -205,6 +226,7 @@ page = f'''<title>Decider Research Tracker</title>
   <h2>Tier B: LoRA on the torso + head</h2>
   {panel(B, "All torsos, LoRA rank 16, 8k rows", 0.40, 0.70, True)}
   <h2>JevBench public (231 decisions)</h2>
+  <p>Ranked list of every model this repo has scored (blue) next to published reference systems (grey). The dashed line is the goal: Strands Decider 2B at 0.723. Reference bars marked est. come from leaderboard tier accuracies that include sealed items, re-weighted to the public tier mix, so read them as ±0.02.</p>
   {jev_panel(jev)}
   <h2>All experiments</h2>
   <div class="table-wrap"><table><thead><tr><th>when</th><th>tier</th><th>torso</th><th>note</th><th class="num">selection</th><th class="num">acc</th><th class="num">Brier</th><th class="num">held-out</th><th>gate</th></tr></thead><tbody>{table_rows}</tbody></table></div>

@@ -44,6 +44,8 @@ LORA = dict(
 )
 LR, HEAD_LR, WEIGHT_DECAY, GRAD_CLIP = 1e-4, 1e-3, 0.01, 1.0
 EPOCHS, BATCH, WARMUP_FRAC = 1, 8, 0.1
+MICRO_BATCH = 4               # rows per forward pass; BATCH // MICRO_BATCH gradient-accumulation steps make up a batch of 8.
+                              # 8 rows of banking77 (77 options, ~800 tokens) overflow a 24 GB card even with checkpointing.
 DEPTH_HEADS = False           # True = laddered heads at every TAP_LAYER, summed loss (Needle)
 # --------------------------------------------------------------------------------------
 
@@ -123,25 +125,29 @@ def main(argv=None):
         [{"params": lora_params, "lr": LR}, {"params": heads.parameters(), "lr": HEAD_LR}],
         weight_decay=WEIGHT_DECAY,
     )
-    steps = args.epochs * math.ceil(len(train_rows) / BATCH)
+    accum = max(1, BATCH // MICRO_BATCH)
+    steps = args.epochs * math.ceil(len(train_rows) / (MICRO_BATCH * accum))
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=[LR, HEAD_LR], total_steps=steps, pct_start=WARMUP_FRAC)
 
     rng = np.random.default_rng(args.seed)   # numpy: encode_row shuffles options with it
     t0 = time.time()
     step = 0
+    opt.zero_grad(set_to_none=True)
     for epoch in range(args.epochs):
-        for batch in P.batches(tok, train_rows, BATCH, shuffle_options=True, rng=rng, device=device, markers=markers, shuffle_rows=True):
+        for mb, batch in enumerate(P.batches(tok, train_rows, MICRO_BATCH, shuffle_options=True, rng=rng, device=device, markers=markers, shuffle_rows=True)):
             with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=device == "cuda"):
                 logits_per_head = forward_logits(torso, heads, batch, taps)
-                loss = sum(h.loss(z, batch["label"]) for h, z in zip(heads, logits_per_head))
-            opt.zero_grad(set_to_none=True)
+                loss = sum(h.loss(z, batch["label"]) for h, z in zip(heads, logits_per_head)) / accum
             loss.backward()
+            if (mb + 1) % accum:
+                continue
             torch.nn.utils.clip_grad_norm_([*lora_params, *heads.parameters()], GRAD_CLIP)
             opt.step()
             sched.step()
+            opt.zero_grad(set_to_none=True)
             step += 1
             if step % 50 == 0:
-                print(f"step {step}/{steps} loss {loss.item():.4f} {time.time() - t0:.0f}s", flush=True)
+                print(f"step {step}/{steps} loss {loss.item() * accum:.4f} {time.time() - t0:.0f}s", flush=True)
     train_s = time.time() - t0
 
     # ---- evaluation: frozen harness, two option orders, per-type temperature on dev ------
@@ -161,7 +167,7 @@ def main(argv=None):
     torso.save_pretrained(run_dir / "lora")
     torch.save(final_head.state_dict(), run_dir / "head.pt")
     (run_dir / "config.json").write_text(json.dumps({"lora": LORA, "lr": LR, "head_lr": HEAD_LR,
-                                                       "epochs": args.epochs, "batch": BATCH,
+                                                       "epochs": args.epochs, "batch": BATCH, "micro_batch": MICRO_BATCH,
                                                        "head": head_mod.HEAD_CONFIG, "temps": temps, "torso": args.torso, "tap_layers": list(taps),
                                                        "report": report}, indent=2, default=str))
     print(json.dumps({k: v for k, v in report.items() if not isinstance(v, dict)}, indent=2, default=str))

@@ -67,3 +67,7 @@ beat the single head at rank 16 (0.620–0.641 across seeds).
 dev acc 0.761 / sel 0.666 / Brier 0.316 / held-out 0.724 / order sens 1.05%; JevBench 162/231 = 0.701. The
 0.8B with the same recipe: 0.743 / 0.641 / 0.344 / 0.605 / 2.2%; JevBench 152. The torso step is worth +0.12
 held-out accuracy and +10 JevBench decisions; Strands' 2B (0.723, 123k rows) is 5 decisions away.
+
+**Three epochs** (0.8B, LayerNorm@16 head, LoRA r16): dev 0.629 / held-out 0.638 / order sens 1.25%, no better
+than two epochs within seed noise. Final-model candidate for this recipe: 0.8B, LayerNorm@16 head, 2 epochs
+(JevBench 152/231); the 2B at 1 epoch reaches 162/231.

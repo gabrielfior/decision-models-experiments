@@ -11,3 +11,5 @@ timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	
 2026-10-03T15:37:48	modal:1f0b412	B	LN16 head + Kev LoRA r16, 2 epochs (Kev epoch count), dropout active	1	0.6408	0.0110	0.7415	0.3390	0.0146	0.6577	0.4453	0.0140	26.9982	True			
 10031155	modal:rebuilt	B	LFM2.5-230M + LoRA r16 (all linear), LN pointer head tap 1 (layer 9)	1	0.5077	0.0114	0.6315	0.4375	0.0195	0.4299	0.6727	0.0410	8.0766	True	[0.5077353422812462]		
 10031155	modal:rebuilt	B	ModernBERT-large + LoRA r16 (Wqkv Wo Wi), LN pointer head tap 1 (layer 19), untrained marker embeddings	1	0.4773	0.0117	0.6075	0.4584	0.0351	0.3819	0.7148	0.0760	14.8987	True	[0.47728484721151543]		
+2026-10-03T16:11:09	pod:pod	B	scaling check: Qwen3.5-2B + LoRA r16, LN16 head, 1 epoch	1	0.6660	0.0107	0.7605	0.3159	0.0115	0.7236	0.3639	0.0105	52.4220		0.6660		f9a1bcc9
+2026-10-03T17:01:30	pod:pod	B	LN16 head + LoRA r16, 3 epochs (epoch probe), dropout active	1	0.6288	0.0115	0.7310	0.3437	0.0282	0.6382	0.4527	0.0125	29.3896		0.6288	0.6660	f9a1bcc9

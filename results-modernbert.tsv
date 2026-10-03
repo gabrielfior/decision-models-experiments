@@ -1,0 +1,2 @@
+timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	heldout_acc	heldout_brier	order_sens	p50_ms	kept	per_seed	baseline
+2026-10-03T11:05:48	5a91ea0	A	baseline ModernBERT-large: Kev pointer head (width 256, last tap layer 28) on frozen cache; marker embeddings untrained	3	0.2386	0.0100	0.4105	0.6535	0.0374	0.2600	0.7590	0.0000	nan	True	0.2322,0.2423,0.2412	

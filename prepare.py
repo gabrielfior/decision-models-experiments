@@ -409,6 +409,9 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
             perm = [int(i) for i in rng.permutation(n)]
         elif order == "reversed":
             perm = perm[::-1]
+        elif order.startswith("shift:"):                 # cyclic rotation by k: presented position j shows option (j + k) mod n
+            k = int(order.split(":")[1]) % n
+            perm = perm[k:] + perm[:k]
     label = None if row["label"] is None else perm.index(row["label"])
 
     state_ids = tok.encode(row["state"], add_special_tokens=False)[:MAX_STATE_TOKENS]

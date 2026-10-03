@@ -54,3 +54,10 @@ def test_canonical_probs_undo_the_option_permutation_and_tta_averages():
     assert p[2] > p[1] > p[0]                     # canonical option 2 was shown first with the top logit
     avg = serve.average_probs([p, np.array([0.2, 0.3, 0.5])])
     assert abs(avg.sum() - 1) < 1e-9 and np.argmax(avg) == 2
+
+
+def test_tta_orders_lists_distinct_orders_up_to_n():
+    assert serve.tta_orders(1) == ["identity"]
+    assert serve.tta_orders(2) == ["identity", "reversed"]
+    assert serve.tta_orders(4) == ["identity", "reversed", "shift:1", "shift:2"]
+    assert len(set(serve.tta_orders(8))) == 8

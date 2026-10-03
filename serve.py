@@ -36,6 +36,14 @@ def canonical_probs(z: np.ndarray, perm: list[int], temperature: float = 1.0) ->
     return canon
 
 
+def tta_orders(n: int) -> list[str]:
+    """The option orders used for test-time averaging: identity, reversed, then cyclic shifts.
+    Averaging over orders makes the decision (nearly) permutation-invariant at inference, which is
+    exactly the property the one-pass scorer lacks; cost grows linearly with n."""
+    orders = ["identity", "reversed"] + [f"shift:{k}" for k in range(1, max(n, 1))]
+    return orders[:n]
+
+
 def average_probs(ps: list[np.ndarray]) -> np.ndarray:
     """Test-time augmentation: mean of probability vectors from different option orders (renormalised)."""
     m = np.mean(np.stack(ps), axis=0)
@@ -70,10 +78,12 @@ def head_config_from_run(saved: dict | None) -> dict | None:
 
 
 class Decider:
-    """Torso (+ optional LoRA) + head + per-type temperatures, loaded once."""
+    """Torso (+ optional LoRA) + head + per-type temperatures, loaded once. `tta` = number of option
+    orders averaged (1 = none). Several run dirs form an ensemble: each member is a full model."""
 
-    def __init__(self, torso: str, run_dir: Path | None, head_path: Path | None, device: str, tta: bool = False):
-        self.tta = tta
+    def __init__(self, torso: str, run_dir: Path | None, head_path: Path | None, device: str, tta: int = 1, extra_runs: list | None = None):
+        self.tta = int(tta) if not isinstance(tta, bool) else (2 if tta else 1)
+        self.members = [Decider(torso, r, None, device, 1) for r in (extra_runs or [])]
         import torch
         import head as head_mod
         import train
@@ -110,16 +120,22 @@ class Decider:
             h_ans, h_opts = self.train.gather_readout(out.hidden_states, batch["decide_pos"], batch["opt_pos"], batch["opt_mask"], self.taps)
             return self.head(h_ans.float(), h_opts.float(), batch["opt_mask"])
 
-    def decide(self, state, question: dict) -> dict:
-        row = P.question_to_row(state, question)
+    def probs(self, row: dict) -> list[np.ndarray]:
         T = self.temps.get(row["qtype"], 1.0)
-        orders = ("identity", "reversed") if (self.tta and row["qtype"] == "choice") else ("identity",)
+        orders = tta_orders(self.tta) if row["qtype"] == "choice" else ["identity"]
         ps = []
         for order in orders:
             batch = next(P.batches(self.tok, [row], 1, shuffle_options=False, device=self.device, markers=self.markers, order=order))
             z = self.logits(batch)[0, : row["n_options"]].float().cpu().numpy()
             ps.append(canonical_probs(z, batch["perm"][0], T))
-        return build_answer(row["qtype"], row["options"], average_probs(ps))
+        for m in self.members:
+            m.tta = self.tta
+            ps += m.probs(row)
+        return ps
+
+    def decide(self, state, question: dict) -> dict:
+        row = P.question_to_row(state, question)
+        return build_answer(row["qtype"], row["options"], average_probs(self.probs(row)))
 
 
 def make_handler(decider: Decider, model_name: str):
@@ -152,16 +168,17 @@ def make_handler(decider: Decider, model_name: str):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--torso", default="Qwen/Qwen3.5-0.8B-Base")
-    ap.add_argument("--run", default=None, help="run dir with lora/, head.pt, config.json")
+    ap.add_argument("--run", action="append", default=None, help="run dir with lora/, head.pt, config.json; repeat for an ensemble")
     ap.add_argument("--head", default=None, help="a head.pt to use (Tier A head on the frozen torso)")
     ap.add_argument("--port", type=int, default=8811)
     ap.add_argument("--name", default="decider-autoresearch")
-    ap.add_argument("--tta", action="store_true", help="score choice questions under two option orders and average (halves order sensitivity, 2x compute)")
+    ap.add_argument("--tta", nargs="?", const=2, default=1, type=int, help="average over N option orders for choice questions (default 1 = off; bare flag = 2)")
     a = ap.parse_args(argv)
     import torch
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    d = Decider(a.torso, a.run, a.head, device, tta=a.tta)
-    print(f"serving {a.name} on http://127.0.0.1:{a.port}/v1/systemone (device {device}, temps {d.temps})", flush=True)
+    runs = a.run or [None]
+    d = Decider(a.torso, runs[0], a.head, device, tta=a.tta, extra_runs=runs[1:])
+    print(f"serving {a.name} on http://127.0.0.1:{a.port}/v1/systemone (device {device}, tta {d.tta}, members {1 + len(d.members)}, temps {d.temps})", flush=True)
     ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(d, a.name)).serve_forever()
 
 

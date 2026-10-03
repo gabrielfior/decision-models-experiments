@@ -183,3 +183,13 @@ def test_qwen_2b_shares_the_qwen_layout_for_the_scaling_check():
     c = P.torso_config("Qwen/Qwen3.5-2B-Base")
     assert c["markers"] == P.QWEN_MARKERS and c["tap_layers"] == (12, 16, 20, 24) and c["n_layers"] == 24
     assert c["lora_targets"] == P.torso_config("Qwen/Qwen3.5-0.8B-Base")["lora_targets"]
+
+
+def test_encode_row_cyclic_shift_orders_rotate_choice_options_and_the_label():
+    row = P.flatten([_record("r1", "yelp")])[0]            # choice, options a b c, label index 1
+    enc = P.encode_row(FakeTok(), row, P.QWEN_MARKERS, order="shift:1")
+    assert enc["perm"] == [1, 2, 0] and enc["label"] == 0     # shown first is canonical option 1 (the label)
+    enc2 = P.encode_row(FakeTok(), row, P.QWEN_MARKERS, order="shift:2")
+    assert enc2["perm"] == [2, 0, 1] and enc2["label"] == 2
+    noul = P.flatten([_record("r1", "yelp")])[1]
+    assert P.encode_row(FakeTok(), noul, P.QWEN_MARKERS, order="shift:1")["perm"] == [0, 1]   # never reordered

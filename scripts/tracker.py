@@ -64,7 +64,8 @@ W, H, PAD = 760, 300, dict(l=56, r=16, t=28, b=44)
 LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln16-head": "0.8B · LN@16 head + LoRA",
           "tierB-ln16-head-2epochs": "0.8B · LN@16 + LoRA, 2 epochs", "tierA-frozen-ln16-head": "0.8B frozen · LN@16 head",
           "tierB-lfm230m-lora": "LFM2.5-230M + LoRA", "tierB-modernbert-lora": "ModernBERT-large + LoRA",
-          "tierB-qwen2b-ln16": "2B · LN@16 head + LoRA"}
+          "tierB-qwen2b-ln16": "2B · LN@16 head + LoRA", "tierB-2b-final-10k-2ep": "2B · LN@16 + LoRA, 10k rows, 2 epochs",
+          "tierB-2b-final-10k-2ep-tta": "2B · 10k rows, 2 epochs, two-order TTA"}
 
 
 def sx(i, n):

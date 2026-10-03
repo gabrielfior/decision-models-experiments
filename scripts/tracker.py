@@ -65,7 +65,13 @@ LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln
           "tierB-ln16-head-2epochs": "0.8B · LN@16 + LoRA, 2 epochs", "tierA-frozen-ln16-head": "0.8B frozen · LN@16 head",
           "tierB-lfm230m-lora": "LFM2.5-230M + LoRA", "tierB-modernbert-lora": "ModernBERT-large + LoRA",
           "tierB-qwen2b-ln16": "2B · LN@16 head + LoRA", "tierB-2b-final-10k-2ep": "2B · LN@16 + LoRA, 10k rows, 2 epochs",
-          "tierB-2b-final-10k-2ep-tta": "2B · 10k rows, 2 epochs, two-order TTA"}
+          "tierB-2b-final-10k-2ep-tta": "2B · 10k rows, 2 epochs, two-order TTA",
+          "tierB-2b-ln16-2ep": "2B · LN@16 + LoRA, 8k rows, 2 epochs", "tierB-2b-ln16-2ep-tta": "2B · 8k, 2 epochs, TTA2",
+          "tierB-2b-xopt-1ep": "2B · cross-option head + LoRA", "tierB-2b-xopt-1ep-tta": "2B · cross-option head, TTA2",
+          "tierB-2b-ln16-s1": "2B · LN@16 + LoRA, seed 1", "tierB-2b-ln16-s1-tta": "2B · seed 1, TTA2",
+          "tierB-2b-half-depth": "2B · read layer 12 (half depth)", "tierB-2b-half-depth-tta": "2B · half depth, TTA2",
+          "2ep8k-tta4": "2B · 8k, 2 epochs, TTA4", "2ep8k-tta8": "2B · 8k, 2 epochs, TTA8", "10k2ep-tta4": "2B · 10k, 2 epochs, TTA4", "10k2ep-tta8": "2B · 10k, 2 epochs, TTA8",
+          "ens-2ep8k+10k-tta2": "2B ensemble of 2, TTA2", "ens-2ep8k+10k-tta4": "2B ensemble of 2, TTA4", "ens-3-tta2": "2B ensemble of 3, TTA2", "ens-3-tta4": "2B ensemble of 3, TTA4"}
 
 
 def sx(i, n):
@@ -138,7 +144,7 @@ def jev_panel(j, refs=REFERENCES, target=TARGET):
     theirs = [{"label": r["label"], "acc": r["acc"], "ours": False, "tip": f'{r["label"]}: {r["acc"]:.3f} ({r["kind"]}) · {r["note"]}',
                "val": f'{r["acc"]:.3f}' + ("" if r["kind"] == "exact" else " est.")} for r in refs]
     rows = sorted(ours + theirs, key=lambda r: -r["acc"])
-    rowh, top, left, right = 30, 34, 300, 24
+    rowh, top, left, right = 24, 34, 300, 24
     h = top + rowh * len(rows) + 46
     lo, hi = 0.30, 1.00
     def x(v):

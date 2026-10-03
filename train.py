@@ -92,11 +92,17 @@ def main(argv=None):
     run_dir = Path(args.out or P.ROOT / "runs" / time.strftime("%Y%m%d-%H%M%S"))
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    tok, torso, d_model = P.load_torso(args.torso, dtype=torch.float32, device=device)
+    # bf16 weights on GPU (1.5 GB for 0.8B) and gradient checkpointing: activations are recomputed
+    # in the backward pass instead of stored, trading ~30% compute for fitting a 24 GB card.
+    tok, torso, d_model = P.load_torso(args.torso, dtype=torch.bfloat16 if device == "cuda" else torch.float32, device=device)
     for p in torso.parameters():
         p.requires_grad_(False)
+    if device == "cuda":
+        torso.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     lora_cfg = {k: v for k, v in LORA.items() if v is not None}
     torso = get_peft_model(torso, LoraConfig(**lora_cfg))
+    if device == "cuda":
+        torso.enable_input_require_grads()
 
     n_layers = len(P.TAP_LAYERS)
     if DEPTH_HEADS:

@@ -32,9 +32,11 @@ image = (
     .pip_install(
         "transformers==5.17.0", "peft==0.21.0", "accelerate>=1.15.0", "datasets>=3.0",
         "huggingface-hub>=0.30", "safetensors>=0.4", "numpy>=2.0",
+        "flash-linear-attention==0.5.2",   # fused GatedDeltaNet kernel; the PyTorch fallback OOMs a 24 GB card in training
     )
     .env({"HF_HOME": f"{V}/hf", "DECIDER_DATA": f"{V}/data", "DECIDER_CACHE": f"{V}/cache",
-          "DECIDER_RUNS": f"{V}/runs", "DECIDER_RESULTS": f"{V}/runs/results.tsv", "TOKENIZERS_PARALLELISM": "false"})
+          "DECIDER_RUNS": f"{V}/runs", "DECIDER_RESULTS": f"{V}/runs/results.tsv", "TOKENIZERS_PARALLELISM": "false",
+          "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
     .add_local_python_source("prepare", "head", "train")
     .add_local_dir("data/splits", remote_path="/root/data/splits")   # the committed row ids
 )

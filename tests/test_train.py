@@ -130,3 +130,9 @@ def test_hybrid_head_setup_gives_letter_emb_and_prefix_only_for_hybrid(monkeypat
     monkeypatch.setattr(P, "LETTER_PREFIX", False)
     monkeypatch.setattr(train.head_mod, "HEAD_CONFIG", {**train.head_mod.HEAD_CONFIG, "name": "pointer"})
     assert train.hybrid_head_setup(torso, tok) == {} and P.LETTER_PREFIX is False
+
+
+def test_micro_batch_override_keeps_effective_batch(monkeypatch):
+    monkeypatch.setattr(train, "MICRO_BATCH", 4)
+    accum = train.apply_micro_batch(2)
+    assert train.MICRO_BATCH == 2 and accum == train.BATCH // 2

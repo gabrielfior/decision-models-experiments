@@ -58,6 +58,15 @@ DEPTH_HEADS = False           # True = laddered heads at every TAP_LAYER, summed
 # --------------------------------------------------------------------------------------
 
 
+def apply_micro_batch(n: int | None) -> int:
+    """--micro-batch N: rows per forward pass; gradient accumulation keeps the effective batch at BATCH.
+    Use 2 with --consistency (two live graphs) or for long option lists on a 24 GB card."""
+    global MICRO_BATCH
+    if n:
+        MICRO_BATCH = int(n)
+    return max(1, BATCH // MICRO_BATCH)
+
+
 def apply_head_overrides(spec: str | None) -> None:
     """--head-cfg '{"name": "cross_option", "residual_pointer": true}' changes only the given HEAD_CONFIG keys."""
     if spec:
@@ -229,6 +238,7 @@ def main(argv=None):
     ap.add_argument("--depth-heads", action="store_true", help="laddered heads at every tap, summed loss (Needle)")
     ap.add_argument("--lr", type=float, default=None)
     ap.add_argument("--head-cfg", default=None, help='JSON overrides for head.HEAD_CONFIG, e.g. {"name":"cross_option"}')
+    ap.add_argument("--micro-batch", type=int, default=None, help="rows per forward pass (default 4); accumulation keeps the batch at 8")
     ap.add_argument("--train-splits", default="train", help="comma list of splits to train on (final retrain: train,dev)")
     ap.add_argument("--calib-split", default="dev", help="split that fits temperatures and is reported as dev")
     ap.add_argument("--consistency", type=float, default=0.0,
@@ -239,6 +249,7 @@ def main(argv=None):
     ap.add_argument("--kl-weight", type=float, default=0.5, help="alpha in (1-alpha)*CE + alpha*KL(teacher||student); rows missing from the teacher file use CE")
     args = ap.parse_args(argv)
     apply_head_overrides(args.head_cfg)
+    apply_micro_batch(args.micro_batch)
     global DEPTH_HEADS, LR
     if args.rank:
         LORA["r"], LORA["lora_alpha"] = args.rank, 2 * args.rank

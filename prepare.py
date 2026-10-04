@@ -299,6 +299,47 @@ def flatten(records: list[dict]) -> list[dict]:
     return rows
 
 
+ABSTAIN_OPTION = ("none of the above", None)   # the extra option augment_row appends (key, desc)
+
+
+def augment_row(row: dict, rng, p_abstain: float = 0.10, p_unrelated: float = 0.25, pool=None) -> dict:
+    """Abstain / unrelated-label augmentation (the Mapika decider recipe); a pure function of (row, rng).
+
+    Teaches the model to condition on the supplied options instead of guessing the answer from the
+    state. Only CHOICE rows with >= 3 options are eligible; noul/score rows (whose option order carries
+    meaning) and short choice rows come back unchanged. For an eligible row:
+      * with probability p_abstain the option ABSTAIN_OPTION is appended at the END of the list
+        (label unchanged, n_options + 1);
+      * among those rows, with probability p_unrelated every ORIGINAL option is replaced by a label
+        drawn from `pool` (a list of (key, desc) tuples harvested from OTHER rows, e.g. train.augment_pool)
+        that does not appear in this row, and the label moves to the abstain option (the last index).
+        Without a pool, or when it has too few foreign entries, the row stays an abstain-only row.
+    The input row is never mutated: an augmented row is a fresh dict with a fresh option list, and it
+    carries "augment": "abstain" | "unrelated" for bookkeeping (encode_row ignores it).
+    Draws are made only for eligible rows, so the result is deterministic under a seeded rng.
+    """
+    if row["qtype"] != "choice" or row["n_options"] < 3:
+        return row
+    if rng.random() >= p_abstain:
+        return row
+    n = row["n_options"]
+    options = list(row["options"]) + [ABSTAIN_OPTION]
+    label, kind = row["label"], "abstain"
+    if rng.random() < p_unrelated:
+        own_keys = {k for k, _ in row["options"]} | {ABSTAIN_OPTION[0]}
+        foreign, seen = [], set()
+        for o in pool or ():
+            key = o[0]
+            if key not in own_keys and key not in seen:
+                seen.add(key)
+                foreign.append(tuple(o))
+        if len(foreign) >= n:
+            picks = [int(i) for i in rng.choice(len(foreign), size=n, replace=False)]
+            options = [foreign[i] for i in picks] + [ABSTAIN_OPTION]
+            label, kind = n, "unrelated"
+    return {**row, "options": options, "label": label, "n_options": n + 1, "augment": kind}
+
+
 def build_splits(rows: list[dict], seed: int = SEED, n_train: int = N_TRAIN, n_dev: int = N_DEV,
                  held_out=HELD_OUT_FAMILIES) -> dict[str, list[str]]:
     """Fix train / dev / heldout as lists of row ids.

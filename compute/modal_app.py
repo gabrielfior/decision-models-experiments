@@ -121,10 +121,12 @@ def cache(torso: str = "Qwen/Qwen3.5-0.8B-Base", batch_size: int = 16):
 
 @app.local_entrypoint()
 def score(name: str, runs: str, torso: str = "Qwen/Qwen3.5-2B-Base", tta: int = 1):
-    """runs: comma-separated run dir names under /vol/runs (or absolute paths); several = ensemble."""
+    """runs: run dir names under /vol/runs (or absolute paths) separated by ';' (names contain commas); several = ensemble."""
     _guard()
-    rc = _score.remote(name, runs.split(","), torso, tta)
+    rc = _score.remote(name, [r for r in runs.split(";") if r], torso, tta)
     print(f"score rc={rc}")
+    if rc != 0:
+        raise SystemExit(rc)
 
 
 @app.local_entrypoint()

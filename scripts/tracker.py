@@ -78,6 +78,9 @@ LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln
           "9k9-2ep-s1": "2B · 9.9k rows (train+held-out), 2 epochs, seed 1", "9k9-2ep-s1-tta2": "2B · 9.9k rows, seed 1, TTA2",
           "9k9-2ep-s0": "2B · 9.9k rows (train+held-out), 2 epochs, seed 0", "9k9-2ep-s0-tta2": "2B · 9.9k rows, seed 0, TTA2",
           "ens-9k9-s01-tta2": "2B · 9.9k rows, ensemble of seeds 0+1, TTA2",
+          "augment-2ep": "2B · abstain/unrelated augmentation, 2 epochs", "augment-2ep-tta2": "2B · augmentation, TTA2",
+          "preview-2ep": "2B · option preview before state, 2 epochs", "preview-2ep-tta2": "2B · option preview, TTA2",
+          "ens-9k9+aug-tta2": "2B · 9.9k seeds 0+1 + augmentation, ensemble of 3, TTA2",
           "ens-2ep8k+10k-tta2": "2B ensemble of 2, TTA2", "ens-2ep8k+10k-tta4": "2B ensemble of 2, TTA4", "ens-3-tta2": "2B ensemble of 3, TTA2", "ens-3-tta4": "2B ensemble of 3, TTA4"}
 
 

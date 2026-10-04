@@ -287,7 +287,7 @@ def as_text(x) -> str:
     """Kev stores some states and instructions as JSON (dicts, lists of chat turns); render them."""
     if isinstance(x, str):
         return x
-    if isinstance(x, dict) and all(isinstance(v, str) for v in x.values()):
+    if isinstance(x, dict) and all(isinstance(v, (str, int, float, bool)) or v is None for v in x.values()):
         return "\n".join(f"{k}: {v}" for k, v in x.items())
     return json.dumps(x, ensure_ascii=False)
 

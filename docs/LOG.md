@@ -94,3 +94,11 @@ model order-invariant in training, so test-time averaging stops helping, but acc
 unrelated-label augmentation: dev 0.765, JevBench 164 / 165. Option preview before the state: dev 0.756, JevBench
 161 / 163 (worse). Three-model ensemble (two data-lever seeds + augmentation): 170, same as the two-seed ensemble.
 Final: **170/231 (0.736), Brier 0.367**, our own recipe, vs Strands Decider 2B 167/231 (0.723), Brier 0.342.
+
+**Framing correction (2026-10-04).** The 168/168/170 results differ from the 165–167 band in ONE respect: the
+training set. They were trained on train + the two task families the plan had held out (trec, legacy_policy), 9.9k
+rows instead of 8k. On the original 8k rows every architecture variant (LayerNorm head, cross-option attention,
+hybrid letter logits, consistency loss, augmentation, option preview, ensembles, order averaging) tops out at
+165–167 = Strands' 167. So the honest claim is: **our recipe ties Strands Decider 2B on 8k rows and passes it with
+24% more training data.** The extra decisions are a data contribution; and the 9.9k models have no held-out task
+family left, so the 231 public JevBench items are their only generalisation check.

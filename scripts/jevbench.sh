@@ -6,13 +6,14 @@
 # Output lands in runs/jevbench/<run-name>/ (outside the jevbench/ submodule, as the harness requires).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+PY=${PY:-"uv run python"}           # on Modal the container has no uv: PY=python
 NAME=${1:?run name}; shift
 OUT=runs/jevbench/$NAME; mkdir -p "$OUT"
 TASKS=$OUT/tasks.jsonl
 cat jevbench/datasets/public/original.jsonl jevbench/datasets/public/easy.jsonl jevbench/datasets/public/hard.jsonl > "$TASKS"
 echo "tasks: $(wc -l < "$TASKS")"
 
-uv run python serve.py --port 8811 --name "$NAME" "$@" > "$OUT/serve.log" 2>&1 &
+$PY serve.py --port 8811 --name "$NAME" "$@" > "$OUT/serve.log" 2>&1 &
 SERVE=$!
 trap 'kill $SERVE 2>/dev/null || true' EXIT
 for i in $(seq 1 600); do grep -q "serving" "$OUT/serve.log" 2>/dev/null && break; sleep 1; done
@@ -20,10 +21,10 @@ grep -q "serving" "$OUT/serve.log" || { echo "server did not start"; tail -20 "$
 
 export PYTHONPATH=jevbench
 T0=$(date +%s)
-uv run python -m jevbench.cli run --tasks "$TASKS" --adapter typesafe --endpoint http://127.0.0.1:8811 \
+$PY -m jevbench.cli run --tasks "$TASKS" --adapter typesafe --endpoint http://127.0.0.1:8811 \
   --key-env '' --model "$NAME" --results "$OUT/results.jsonl" --raw-dir "$OUT/raw" --ledger "$OUT/ledger.jsonl" \
   --cost-basis no_billable_account_public_endpoint --reserve-usd 0 --manifest "$OUT/manifest.json"
-uv run python -m jevbench.cli summarize --tasks "$TASKS" --results "$OUT/results.jsonl" --public-export "$OUT/summary.json"
+$PY -m jevbench.cli summarize --tasks "$TASKS" --results "$OUT/results.jsonl" --public-export "$OUT/summary.json"
 echo "wall $(( $(date +%s) - T0 ))s"
 python3 - "$OUT/summary.json" <<'PY'
 import json, sys

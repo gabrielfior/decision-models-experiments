@@ -37,8 +37,11 @@ image = (
     .env({"HF_HOME": f"{V}/hf", "DECIDER_DATA": f"{V}/data", "DECIDER_CACHE": f"{V}/cache",
           "DECIDER_RUNS": f"{V}/runs", "DECIDER_RESULTS": f"{V}/runs/results.tsv", "TOKENIZERS_PARALLELISM": "false",
           "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"})
-    .add_local_python_source("prepare", "head", "train")
+    .add_local_python_source("prepare", "head", "train", "serve")
     .add_local_dir("data/splits", remote_path="/root/data/splits")   # the committed row ids
+    .add_local_dir("scripts", remote_path="/root/scripts")
+    .add_local_dir("jevbench/jevbench", remote_path="/root/jevbench/jevbench")          # harness package
+    .add_local_dir("jevbench/datasets/public", remote_path="/root/jevbench/datasets/public")
 )
 
 
@@ -78,6 +81,26 @@ def _train(argv: list[str], commit: str):
     VOL.commit()
 
 
+@app.function(gpu=GPU, volumes={V: VOL}, timeout=3600)
+def _score(name: str, run_dirs: list[str], torso: str, tta: int):
+    """JevBench public via the stock harness against serve.py, on the GPU. Output: /vol/runs/jevbench/<name>/."""
+    import subprocess
+    os.makedirs(f"{V}/runs/jevbench", exist_ok=True)
+    if os.path.exists(f"/root/runs/jevbench"):
+        pass
+    os.makedirs("/root/runs", exist_ok=True)
+    if not os.path.islink("/root/runs/jevbench"):
+        os.symlink(f"{V}/runs/jevbench", "/root/runs/jevbench")
+    args = []
+    for r in run_dirs:
+        args += ["--run", r if r.startswith("/") else f"{V}/runs/{r}"]
+    cmd = ["bash", "scripts/jevbench.sh", name, "--torso", torso, "--tta", str(tta), *args]
+    out = subprocess.run(cmd, cwd="/root", env={**os.environ, "PY": "python", "PYTHONPATH": "/root"}, capture_output=True, text=True)
+    print(out.stdout[-3000:]); print(out.stderr[-1500:])
+    VOL.commit()
+    return out.returncode
+
+
 @app.function(volumes={V: VOL}, timeout=3600)
 def _data():
     import prepare as P
@@ -94,6 +117,14 @@ def data():
 def cache(torso: str = "Qwen/Qwen3.5-0.8B-Base", batch_size: int = 16):
     _guard()
     _cache.remote(torso, _commit(), batch_size)
+
+
+@app.local_entrypoint()
+def score(name: str, runs: str, torso: str = "Qwen/Qwen3.5-2B-Base", tta: int = 1):
+    """runs: comma-separated run dir names under /vol/runs (or absolute paths); several = ensemble."""
+    _guard()
+    rc = _score.remote(name, runs.split(","), torso, tta)
+    print(f"score rc={rc}")
 
 
 @app.local_entrypoint()

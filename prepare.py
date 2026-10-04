@@ -66,6 +66,19 @@ MAX_STATE_TOKENS, MAX_INSTR_TOKENS, MAX_ROW_TOKENS = 384, 512, 2048
 LETTER_PREFIX = False
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
+# Option preview ("option repetition", arXiv 2601.14152): a compact list of the options is placed right after
+# the [state] marker, BEFORE the state text, so the options are visible while the state is read:
+#   [state] Options: o_1 | o_2 | ... s_1..s_n [q] ...
+# The preview is in PRESENTED order (the same permutation as the full [opt] list), each option cut to
+# OPTION_PREVIEW_TOKENS tokens; pieces are tokenised separately and concatenated at the token level. The preview
+# counts toward MAX_ROW_TOKENS; when a row overflows, the state is truncated first (never below
+# OPTION_PREVIEW_MIN_STATE tokens), then the options are capped as usual. Default OFF; train.py --option-preview
+# turns it on and records it in config.json, which serve.py honours.
+OPTION_PREVIEW = False
+OPTION_PREVIEW_PREFIX, OPTION_PREVIEW_SEP = "Options:", " |"
+OPTION_PREVIEW_TOKENS = 6
+OPTION_PREVIEW_MIN_STATE = 64
+
 # The torso ladder (plan §3). Each torso brings its own single-token markers (chosen from tokens
 # the tokenizer already has) and the depths tapped for the read-out, at 50/67/83/100% of depth.
 TORSOS = {
@@ -414,11 +427,24 @@ def letter_embeddings(model, tok):
         return model.get_input_embeddings().weight[torch.as_tensor(letter_token_ids(tok))].detach().clone()
 
 
+def option_preview_ids(tok, qtype: str, options: list[tuple[str, str | None]], perm: list[int]) -> list[int]:
+    """Token ids of the option preview in PRESENTED order: OPTION_PREVIEW_PREFIX, then option_text() of
+    options[perm[j]] cut to OPTION_PREVIEW_TOKENS tokens (the raw key when the description is None, as
+    option_text already does), joined by OPTION_PREVIEW_SEP. Each piece is tokenised on its own."""
+    ids = tok.encode(OPTION_PREVIEW_PREFIX, add_special_tokens=False)
+    sep = tok.encode(OPTION_PREVIEW_SEP, add_special_tokens=False)
+    for slot, j in enumerate(perm):
+        if slot:
+            ids = ids + sep
+        ids = ids + tok.encode(option_text(qtype, *options[j]), add_special_tokens=False)[:OPTION_PREVIEW_TOKENS]
+    return ids
+
+
 def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = False, rng=None,
-               order: str = "identity", letter_prefix: bool | None = None) -> dict:
+               order: str = "identity", letter_prefix: bool | None = None, option_preview: bool | None = None) -> dict:
     """Tokenise one row as  <state> s </state>?  — see the layout note next to QWEN_MARKERS.
 
-        [state] s_1..s_n [q] i_1..i_m ([opt] o_1..o_k [opt_end])*N [decide]
+        [state] (preview)? s_1..s_n [q] i_1..i_m ([opt] o_1..o_k [opt_end])*N [decide]
 
     Returns ids plus the positions the head reads: decide_pos (the plan's <answer>) and
     opt_pos (one per option, at its [opt_end]). With shuffle=True a choice question's
@@ -426,9 +452,13 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
     because the order carries meaning (no/yes, increasing level).
     letter_prefix (None = module LETTER_PREFIX) prefixes the option shown in slot j with
     f"{LETTERS[j]}) " for j < 26, for the hybrid letter-logit read-out.
+    option_preview (None = module OPTION_PREVIEW) inserts option_preview_ids() under the SAME
+    permutation between the [state] marker and the state text; see the note next to OPTION_PREVIEW.
     """
     if letter_prefix is None:
         letter_prefix = LETTER_PREFIX
+    if option_preview is None:
+        option_preview = OPTION_PREVIEW
     m = {k: tok.convert_tokens_to_ids(v) for k, v in markers.items()}
     n = row["n_options"]
     perm = list(range(n))
@@ -449,14 +479,22 @@ def encode_row(tok, row: dict, markers: dict = QWEN_MARKERS, shuffle: bool = Fal
         text = option_text(row["qtype"], *row["options"][j])
         return f"{LETTERS[slot]}) {text}" if letter_prefix and slot < len(LETTERS) else text
     opt_ids = [tok.encode(_shown(slot, j), add_special_tokens=False) for slot, j in enumerate(perm)]
+    preview_ids = option_preview_ids(tok, row["qtype"], row["options"], perm) if option_preview else []
 
-    fixed = len(state_ids) + len(instr_ids) + 3 + 2 * n
+    fixed = len(state_ids) + len(instr_ids) + len(preview_ids) + 3 + 2 * n
     budget = MAX_ROW_TOKENS - fixed
+    if option_preview and sum(map(len, opt_ids)) > budget:
+        # the preview took room from the options: give the state up first (down to a floor), then cap options
+        keep_state = max(OPTION_PREVIEW_MIN_STATE, len(state_ids) - (sum(map(len, opt_ids)) - budget))
+        if keep_state < len(state_ids):
+            state_ids = state_ids[:keep_state]
+            fixed = len(state_ids) + len(instr_ids) + len(preview_ids) + 3 + 2 * n
+            budget = MAX_ROW_TOKENS - fixed
     if sum(map(len, opt_ids)) > budget:
         cap = max(1, budget // n)
         opt_ids = [o[:cap] for o in opt_ids]
 
-    ids = [m["state"], *state_ids, m["q"], *instr_ids]
+    ids = [m["state"], *preview_ids, *state_ids, m["q"], *instr_ids]
     opt_pos = []
     for o in opt_ids:
         ids += [m["opt"], *o, m["opt_end"]]
@@ -490,16 +528,17 @@ def load_torso(name: str, dtype=None, device: str = "cpu"):
 
 def batches(tok, rows: list[dict], batch_size: int, shuffle_options: bool, rng=None, device: str = "cpu",
             order: str = "identity", shuffle_rows: bool = False, markers: dict = QWEN_MARKERS,
-            letter_prefix: bool | None = None):
+            letter_prefix: bool | None = None, option_preview: bool | None = None):
     """Encode rows and yield right-padded tensor batches with the read-out positions.
-    letter_prefix is passed through to encode_row (None = module LETTER_PREFIX)."""
+    letter_prefix and option_preview are passed through to encode_row (None = module LETTER_PREFIX / OPTION_PREVIEW)."""
     import torch
     idx = list(range(len(rows)))
     if shuffle_rows:
         (rng or np.random.default_rng()).shuffle(idx)
     pad_id = getattr(tok, "pad_token_id", None) or 0
     for start in range(0, len(idx), batch_size):
-        encs = [encode_row(tok, rows[i], markers, shuffle=shuffle_options, rng=rng, order=order, letter_prefix=letter_prefix)
+        encs = [encode_row(tok, rows[i], markers, shuffle=shuffle_options, rng=rng, order=order, letter_prefix=letter_prefix,
+                           option_preview=option_preview)
                 for i in idx[start:start + batch_size]]
         B, T, K = len(encs), max(len(e["ids"]) for e in encs), max(e["n_options"] for e in encs)
         ids = torch.full((B, T), pad_id, dtype=torch.long)

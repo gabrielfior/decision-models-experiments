@@ -67,6 +67,15 @@ def apply_micro_batch(n: int | None) -> int:
     return max(1, BATCH // MICRO_BATCH)
 
 
+def apply_option_preview(flag: bool) -> bool:
+    """--option-preview: encode every row this process sees with the option preview before the state
+    (prepare.OPTION_PREVIEW = True; see the note next to it). Default off; the flag only ever turns it on.
+    Returns the resulting setting, which main() records in config.json so serve.py encodes the same way."""
+    if flag:
+        P.OPTION_PREVIEW = True
+    return bool(P.OPTION_PREVIEW)
+
+
 def apply_head_overrides(spec: str | None) -> None:
     """--head-cfg '{"name": "cross_option", "residual_pointer": true}' changes only the given HEAD_CONFIG keys."""
     if spec:
@@ -247,9 +256,13 @@ def main(argv=None):
                          "Two forwards per micro-batch: ~2x time and both graphs are alive until backward (~2x activation memory).")
     ap.add_argument("--kl-teacher", default=None, help="data/teacher/<name>.jsonl from scripts/teacher.py: distil from its option distributions")
     ap.add_argument("--kl-weight", type=float, default=0.5, help="alpha in (1-alpha)*CE + alpha*KL(teacher||student); rows missing from the teacher file use CE")
+    ap.add_argument("--option-preview", action="store_true",
+                    help="list the options (presented order, 6 tokens each) right after the [state] marker, before the state text "
+                         "(option repetition, arXiv 2601.14152); recorded in config.json so serve.py encodes the same way")
     args = ap.parse_args(argv)
     apply_head_overrides(args.head_cfg)
     apply_micro_batch(args.micro_batch)
+    option_preview = apply_option_preview(args.option_preview)
     global DEPTH_HEADS, LR
     if args.rank:
         LORA["r"], LORA["lora_alpha"] = args.rank, 2 * args.rank
@@ -381,6 +394,7 @@ def main(argv=None):
                                                        "epochs": args.epochs, "batch": BATCH, "micro_batch": MICRO_BATCH, "consistency": args.consistency,
                                                        "head": head_cfgs[-1], "heads": head_cfgs, "temps": temps, "torso": args.torso, "tap_layers": list(taps),
                                                        "kl_teacher": args.kl_teacher, "kl_weight": args.kl_weight if args.kl_teacher else None,
+                                                       "option_preview": option_preview,
                                                        "report": report}, indent=2, default=str))
     print(json.dumps({k: v for k, v in report.items() if not isinstance(v, dict)}, indent=2, default=str))
 

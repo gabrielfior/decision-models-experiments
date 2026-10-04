@@ -85,6 +85,16 @@ def complete_head_cfg(head_cfg: dict | None, model, tok) -> tuple[dict | None, b
     return {**head_cfg, "letter_emb": P.letter_embeddings(model, tok)}, True
 
 
+def option_preview_from_run(cfg: dict | None) -> bool:
+    """A run trained with train.py --option-preview has "option_preview": true in its config.json; its rows
+    must then be encoded with the preview it was trained on, so prepare.OPTION_PREVIEW is switched on for
+    this process (and the value is also passed explicitly to prepare.batches). Older configs lack the key: off."""
+    on = bool((cfg or {}).get("option_preview", False))
+    if on:
+        P.OPTION_PREVIEW = True
+    return on
+
+
 class Decider:
     """Torso (+ optional LoRA) + head + per-type temperatures, loaded once. `tta` = number of option
     orders averaged (1 = none). Several run dirs form an ensemble: each member is a full model."""
@@ -116,6 +126,7 @@ class Decider:
             head_cfg = side.get("head", head_cfg)
             self.temps.update(side.get("temps", {}))
         head_cfg, self.letter_prefix = complete_head_cfg(head_config_from_run(head_cfg), self.model, self.tok)
+        self.option_preview = option_preview_from_run(cfg)
         self.head = head_mod.build_head(d, len(self.taps), head_cfg).to(device)
         if head_path is not None:
             self.head.load_state_dict(torch.load(head_path, map_location=device))
@@ -135,7 +146,7 @@ class Decider:
         ps = []
         for order in orders:
             batch = next(P.batches(self.tok, [row], 1, shuffle_options=False, device=self.device, markers=self.markers, order=order,
-                                   letter_prefix=self.letter_prefix))
+                                   letter_prefix=self.letter_prefix, option_preview=self.option_preview))
             z = self.logits(batch)[0, : row["n_options"]].float().cpu().numpy()
             ps.append(canonical_probs(z, batch["perm"][0], T))
         for m in self.members:

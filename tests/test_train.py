@@ -136,3 +136,9 @@ def test_micro_batch_override_keeps_effective_batch(monkeypatch):
     monkeypatch.setattr(train, "MICRO_BATCH", 4)
     accum = train.apply_micro_batch(2)
     assert train.MICRO_BATCH == 2 and accum == train.BATCH // 2
+
+
+def test_option_preview_flag_turns_on_the_module_constant_only_when_set(monkeypatch):
+    monkeypatch.setattr(P, "OPTION_PREVIEW", False)
+    assert train.apply_option_preview(False) is False and P.OPTION_PREVIEW is False
+    assert train.apply_option_preview(True) is True and P.OPTION_PREVIEW is True

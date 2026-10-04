@@ -73,3 +73,10 @@ def test_complete_head_cfg_adds_letter_emb_and_turns_on_the_prefix_only_for_hybr
     cfg2, prefix2 = serve.complete_head_cfg({"name": "pointer", "width": 32, "layer": -1, "norm": True}, torso, tok)
     assert prefix2 is False and "letter_emb" not in cfg2
     assert serve.complete_head_cfg(None, torso, tok) == (None, False)
+
+
+def test_option_preview_from_run_config_turns_on_the_module_constant(monkeypatch):
+    monkeypatch.setattr(P, "OPTION_PREVIEW", False)
+    assert serve.option_preview_from_run({}) is False and P.OPTION_PREVIEW is False
+    assert serve.option_preview_from_run({"option_preview": False}) is False and P.OPTION_PREVIEW is False
+    assert serve.option_preview_from_run({"option_preview": True}) is True and P.OPTION_PREVIEW is True

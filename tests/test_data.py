@@ -243,3 +243,125 @@ def test_letter_prefix_default_follows_the_module_constant(monkeypatch):
     assert _option_segments(off)[0] == tok.encode(P.option_text("choice", *row["options"][0]))
     (b,) = list(P.batches(tok, [row], 1, shuffle_options=False, device="cpu", letter_prefix=False))
     assert b["ids"].shape[1] == len(off["ids"])
+
+
+# ---- option preview (options visible while the state is read) -------------------------
+def test_option_preview_is_off_by_default_and_leaves_ids_identical():
+    assert P.OPTION_PREVIEW is False
+    tok = FakeTok()
+    for row in P.flatten([_record("r1", "yelp", state="w " * 10)]):
+        plain = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=False)
+        off = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=False, option_preview=False)
+        assert plain == off
+        assert plain["ids"][1:1 + plain["state_tokens"]] == tok.encode(row["state"])     # state right after [state]
+
+
+def test_option_preview_ids_compose_prefix_truncated_options_and_separators_in_presented_order():
+    tok = FakeTok()
+    row = P.flatten([_record("r1", "yelp")])[0]                  # choice: a: A, b (no desc), c: C
+    pv = P.option_preview_ids(tok, row["qtype"], row["options"], [2, 0, 1])
+    sep = tok.encode(P.OPTION_PREVIEW_SEP)
+    expected = tok.encode(P.OPTION_PREVIEW_PREFIX)
+    for j, k in enumerate([2, 0, 1]):
+        if j:
+            expected += sep
+        expected += tok.encode(P.option_text("choice", *row["options"][k]))[:P.OPTION_PREVIEW_TOKENS]
+    assert pv == expected
+    # the raw key stands in when the description is None
+    assert tok.encode("b") == tok.encode(P.option_text("choice", "b", None))
+    # long option texts are cut to OPTION_PREVIEW_TOKENS tokens each
+    long_options = [("a", "x " * 30), ("b", "y " * 30)]
+    pv2 = P.option_preview_ids(tok, "choice", long_options, [0, 1])
+    assert len(pv2) == len(tok.encode(P.OPTION_PREVIEW_PREFIX)) + 2 * P.OPTION_PREVIEW_TOKENS + len(sep)
+
+
+def test_encode_row_option_preview_sits_between_state_marker_and_state_text():
+    tok = FakeTok()
+    row = P.flatten([_record("r1", "yelp", state="w " * 10)])[0]
+    plain = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=False)
+    enc = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=False, option_preview=True)
+    pv = P.option_preview_ids(tok, row["qtype"], row["options"], enc["perm"])
+    assert pv and enc["ids"][0] == 900
+    assert enc["ids"][1:1 + len(pv)] == pv                                            # preview after [state]
+    assert enc["ids"][1 + len(pv):1 + len(pv) + enc["state_tokens"]] == tok.encode(row["state"])   # then the state
+    assert enc["ids"][1 + len(pv) + enc["state_tokens"]] == 901                        # then [q]
+    # everything after the preview is the plain layout, shifted
+    assert enc["ids"] == plain["ids"][:1] + pv + plain["ids"][1:]
+    assert enc["decide_pos"] == plain["decide_pos"] + len(pv) and enc["ids"][enc["decide_pos"]] == 904
+    assert enc["opt_pos"] == [p + len(pv) for p in plain["opt_pos"]] and all(enc["ids"][p] == 903 for p in enc["opt_pos"])
+    assert enc["label"] == plain["label"] and enc["perm"] == plain["perm"]
+
+
+def test_encode_row_option_preview_follows_the_shuffle_permutation():
+    tok = FakeTok()
+    row = P.flatten([_record("r1", "yelp")])[0]
+    rng = np.random.default_rng(11)
+    seen = set()
+    for _ in range(20):
+        enc = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=True, rng=rng, option_preview=True)
+        seen.add(tuple(enc["perm"]))
+        pv = P.option_preview_ids(tok, "choice", row["options"], enc["perm"])
+        assert enc["ids"][1:1 + len(pv)] == pv
+        # the full option list agrees with the preview: same permutation
+        for j, seg in enumerate(_option_segments(enc)):
+            assert seg == tok.encode(P.option_text("choice", *row["options"][enc["perm"][j]]))
+        assert enc["perm"][enc["label"]] == row["label"]
+    assert len(seen) > 1
+    # the preview differs between two different permutations
+    a = P.option_preview_ids(tok, "choice", row["options"], [0, 1, 2])
+    b = P.option_preview_ids(tok, "choice", row["options"], [2, 1, 0])
+    assert a != b
+
+
+def test_encode_row_option_preview_on_noul_and_score_keeps_the_fixed_order():
+    tok = FakeTok()
+    rows = P.flatten([_record("r1", "yelp")])
+    rng = np.random.default_rng(0)
+    for row in rows[1:]:                                           # noul, score
+        enc = P.encode_row(tok, row, P.QWEN_MARKERS, shuffle=True, rng=rng, option_preview=True)
+        pv = P.option_preview_ids(tok, row["qtype"], row["options"], list(range(row["n_options"])))
+        assert enc["perm"] == list(range(row["n_options"])) and enc["label"] == row["label"]
+        assert enc["ids"][1:1 + len(pv)] == pv
+        assert enc["ids"][enc["decide_pos"]] == 904 and all(enc["ids"][p] == 903 for p in enc["opt_pos"])
+    # score options show their level description, not the index
+    score = rows[2]
+    pv = P.option_preview_ids(tok, "score", score["options"], [0, 1, 2])
+    assert pv[len(tok.encode(P.OPTION_PREVIEW_PREFIX)):][:2] == tok.encode("1 star")
+
+
+def test_option_preview_default_follows_the_module_constant(monkeypatch):
+    tok = FakeTok()
+    row = P.flatten([_record("r1", "yelp")])[0]
+    monkeypatch.setattr(P, "OPTION_PREVIEW", True)
+    on = P.encode_row(tok, row, P.QWEN_MARKERS)
+    pv = P.option_preview_ids(tok, "choice", row["options"], on["perm"])
+    assert on["ids"][1:1 + len(pv)] == pv
+    off = P.encode_row(tok, row, P.QWEN_MARKERS, option_preview=False)
+    assert off["ids"][1:1 + off["state_tokens"]] == tok.encode(row["state"])
+    (b,) = list(P.batches(tok, [row], 1, shuffle_options=False, device="cpu", option_preview=False))
+    assert b["ids"].shape[1] == len(off["ids"])
+    (b_on,) = list(P.batches(tok, [row], 1, shuffle_options=False, device="cpu"))
+    assert b_on["ids"].shape[1] == len(on["ids"]) == len(off["ids"]) + len(pv)
+    assert b_on["ids"][0, b_on["decide_pos"][0]].item() == 904
+
+
+def test_option_preview_counts_in_the_row_budget_and_truncates_the_state_first():
+    tok = FakeTok()
+    # a long state alone is cut to MAX_STATE_TOKENS; preview included, the row still fits
+    row = P.flatten([_record("r1", "yelp", state="w " * 5000)])[0]
+    enc = P.encode_row(tok, row, P.QWEN_MARKERS, option_preview=True)
+    assert len(enc["ids"]) <= P.MAX_ROW_TOKENS and enc["state_tokens"] == P.MAX_STATE_TOKENS
+    # huge options overflow the budget: with the preview on, the state yields before the options are capped
+    rec = _record("r1", "yelp", state="s " * 300)
+    rec["questions"]["q_choice"]["criteria"] = {k: f"{k} " * 700 for k in "abc"}
+    row = P.flatten([rec])[0]
+    plain = P.encode_row(tok, row, P.QWEN_MARKERS)
+    enc = P.encode_row(tok, row, P.QWEN_MARKERS, option_preview=True)
+    assert len(plain["ids"]) <= P.MAX_ROW_TOKENS and len(enc["ids"]) <= P.MAX_ROW_TOKENS
+    assert plain["state_tokens"] == 300                                   # default path untouched
+    assert P.OPTION_PREVIEW_MIN_STATE <= enc["state_tokens"] < 300        # the state gave way first
+    pv = P.option_preview_ids(tok, "choice", row["options"], enc["perm"])
+    assert enc["ids"][1:1 + len(pv)] == pv and enc["ids"][enc["decide_pos"]] == 904
+    assert all(enc["ids"][p] == 903 for p in enc["opt_pos"])
+    # the options kept at least as much text as they had without the preview
+    assert all(len(b) >= len(a) for a, b in zip(_option_segments(plain), _option_segments(enc)))

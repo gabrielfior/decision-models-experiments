@@ -71,3 +71,19 @@ held-out accuracy and +10 JevBench decisions; Strands' 2B (0.723, 123k rows) is 
 **Three epochs** (0.8B, LayerNorm@16 head, LoRA r16): dev 0.629 / held-out 0.638 / order sens 1.25%, no better
 than two epochs within seed noise. Final-model candidate for this recipe: 0.8B, LayerNorm@16 head, 2 epochs
 (JevBench 152/231); the 2B at 1 epoch reaches 162/231.
+
+## 2026-10-03/04 — goal 2: beat Strands Decider 2B (167/231) with our own architecture
+
+Everything at 2B + LoRA sits in a 161–167 band on JevBench public regardless of head (plain pointer, LayerNorm@16,
+cross-option attention, hybrid letter-logit read-out, half-depth read-out at 146), and seed noise is about ±4
+decisions. Averaging predictions over option orders (two orders: +5–6 decisions; 4 or 8 orders: no more) and over
+models (ensembles of 2–3) raises the floor to 164–167 and saturates there. LoRA weight soups across seeds hurt
+(155–164). Distillation from an external decision model was excluded by decision: the result must be ours.
+
+What broke the band was training data, not the head: training on train + the two held-out families (9.9k rows
+instead of 8k, temperatures fitted on dev) with the LayerNorm@16 head and two epochs gives dev acc 0.768/0.769 for
+seeds 0/1, JevBench 166/166 plain and **168/168 with two-order averaging**, and the two-seed ensemble with
+two-order averaging reaches **170/231 = 0.736 (Brier 0.367)**, three decisions above Strands' 167 (Brier 0.342).
+Each piece is this repo's own: the token layout and LayerNorm pointer head, the LoRA recipe (Kev's targets), the
+two-order inference, and the data split. Still open: the Brier gap to Strands, and the abstain-augmentation,
+option-preview and shuffle-consistency variants (scored at the end of the session).

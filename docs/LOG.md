@@ -87,3 +87,10 @@ two-order averaging reaches **170/231 = 0.736 (Brier 0.367)**, three decisions a
 Each piece is this repo's own: the token layout and LayerNorm pointer head, the LoRA recipe (Kev's targets), the
 two-order inference, and the data split. Still open: the Brier gap to Strands, and the abstain-augmentation,
 option-preview and shuffle-consistency variants (scored at the end of the session).
+
+**Goal 2, closing the remaining lanes.** Shuffle-consistency loss (two option orders per step, symmetric KL, R-Drop):
+dev acc 0.764, order sensitivity 0.8% (lowest of any run), JevBench 165 / 165 / 164 with 1 / 2 / 4 orders: it makes the
+model order-invariant in training, so test-time averaging stops helping, but accuracy stays in the band. Abstain /
+unrelated-label augmentation: dev 0.765, JevBench 164 / 165. Option preview before the state: dev 0.756, JevBench
+161 / 163 (worse). Three-model ensemble (two data-lever seeds + augmentation): 170, same as the two-seed ensemble.
+Final: **170/231 (0.736), Brier 0.367**, our own recipe, vs Strands Decider 2B 167/231 (0.723), Brier 0.342.

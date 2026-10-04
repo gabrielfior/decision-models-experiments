@@ -134,7 +134,8 @@ def train_lora(note: str, seed: int = 0, max_rows: int = 0, extra: str = ""):
     """extra: further train.py flags as one string, e.g. "--rank 64 --depth-heads"."""
     _guard()
     import time
-    argv = ["--note", note, "--seed", str(seed), "--out", f"{V}/runs/{note[:40].replace(' ', '_')}-s{seed}-{time.strftime('%m%d%H%M')}", *extra.split()]
+    slug = note[:40].replace(" ", "_").replace("/", "-")   # a '/' in the note would nest the run dir
+    argv = ["--note", note, "--seed", str(seed), "--out", f"{V}/runs/{slug}-s{seed}-{time.strftime('%m%d%H%M')}", *extra.split()]
     if max_rows:
         argv += ["--max-rows", str(max_rows)]
     _train.remote(argv, _commit())

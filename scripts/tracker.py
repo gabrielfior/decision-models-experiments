@@ -83,6 +83,9 @@ LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln
           "ens-9k9+aug-tta2": "2B · 9.9k seeds 0+1 + augmentation, ensemble of 3, TTA2",
           "tierB-2b-consistency": "2B · shuffle-consistency loss (R-Drop), 2 epochs", "tierB-2b-consistency-tta2": "2B · consistency loss, TTA2", "tierB-2b-consistency-tta4": "2B · consistency loss, TTA4",
           "ens-8k-only-s1+aug-tta2": "2B · 8k rows only: ensemble of 2 variants, TTA2", "ens-8k-only-4-tta2": "2B · 8k rows only: ensemble of 4 architecture variants, TTA2",
+          "9k9-2ep-s2": "2B · 9.9k rows, seed 2", "9k9-2ep-s2-tta2": "2B · 9.9k rows, seed 2, TTA2", "2ep8k-s2": "2B · 8k, 2 epochs, seed 2", "2ep8k-s2-tta2": "2B · 8k, 2 epochs, seed 2, TTA2",
+          "ens-9k9-s012-tta2": "2B · 9.9k rows, ensemble of 3 seeds, TTA2", "ens-9k9-s012": "2B · 9.9k rows, ensemble of 3 seeds", "ens-8k-only-s12+cons+aug-tta2": "2B · 8k only: seeds 1+2 + consistency + augmentation, TTA2",
+          "9k9-consistency": "2B · consistency loss on 9.9k rows", "9k9-consistency-tta2": "2B · consistency on 9.9k, TTA2",
           "ens-2ep8k+10k-tta2": "2B ensemble of 2, TTA2", "ens-2ep8k+10k-tta4": "2B ensemble of 2, TTA4", "ens-3-tta2": "2B ensemble of 3, TTA2", "ens-3-tta4": "2B ensemble of 3, TTA4"}
 
 

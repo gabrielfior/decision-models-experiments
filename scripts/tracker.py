@@ -62,6 +62,12 @@ def load_jevbench():
 # ---------------------------------------------------------------- svg helpers
 W, H, PAD = 760, 300, dict(l=56, r=16, t=28, b=44)
 LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln16-head": "0.8B · LN@16 head + LoRA",
+          "tierB-minicpm1b-s0": "MiniCPM5-1B-Base + LoRA, 8k", "tierB-minicpm1b-s0-tta2": "MiniCPM5-1B-Base, TTA2",
+          "tierB-minicpm2b-s0": "MiniCPM5-2B-Base + LoRA, 8k", "tierB-minicpm2b-s0-tta2": "MiniCPM5-2B-Base, TTA2",
+          "tierB-lfm2.6b-s0": "LFM2.5-2.6B-Base + LoRA, 8k", "tierB-lfm2.6b-s0-tta2": "LFM2.5-2.6B-Base, TTA2",
+          "tierB-granite2b-s0": "granite-swash-2b + LoRA, 8k", "tierB-granite2b-s0-tta2": "granite-swash-2b, TTA2",
+          "tierB-08b-9k9-s0": "0.8B · 9.9k rows, 2 epochs", "tierB-08b-9k9-s0-tta2": "0.8B · 9.9k rows, TTA2",
+          "export-q2b-9k9-s0-16L-v98k": "2B 9.9k s0 exported: 16 layers + 98k vocab (1.12B)", "export-q2b-9k9-s0-16L-v98k-tta2": "exported 1.12B, TTA2",
           "tierB-ln16-head-2epochs": "0.8B · LN@16 + LoRA, 2 epochs", "tierA-frozen-ln16-head": "0.8B frozen · LN@16 head",
           "tierB-lfm230m-lora": "LFM2.5-230M + LoRA", "tierB-modernbert-lora": "ModernBERT-large + LoRA",
           "tierB-qwen2b-ln16": "2B · LN@16 head + LoRA", "tierB-2b-final-10k-2ep": "2B · LN@16 + LoRA, 10k rows, 2 epochs",

@@ -81,6 +81,11 @@ OPTION_PREVIEW_MIN_STATE = 64
 
 # The torso ladder (plan §3). Each torso brings its own single-token markers (chosen from tokens
 # the tokenizer already has) and the depths tapped for the read-out, at 50/67/83/100% of depth.
+# MiniCPM5 reserved tokens: FIM trio as in Qwen; <function ... </function> wrap one callable in a tool list in its
+# chat format, i.e. "one candidate among several" -- the same role Kev gives <|box_start|>/<|box_end|>.
+MINICPM_MARKERS = {"state": "<|fim_prefix|>", "q": "<|fim_middle|>", "opt": "<function",
+                   "opt_end": "</function>", "decide": "<|fim_suffix|>"}
+
 TORSOS = {
     "Qwen/Qwen3.5-0.8B-Base": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
                                # Kev's targets: attention, MLP and the GatedDeltaNet projections
@@ -90,6 +95,21 @@ TORSOS = {
     "Qwen/Qwen3.5-2B-Base": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
                              "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
                                               "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]},
+    # Community distillation of Qwen3.8-2.4T onto the Qwen3.5-2B architecture (empero-ai, 2026-08): the only
+    # "newer Qwen" at <= 2B; same tokenizer and module names, so a drop-in torso. Instruct-tuned, not a base.
+    "empero-ai/Qwen3.8-2B-Distill": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
+                                     "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+                                                      "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]},
+    # Official post-trained Qwen3.5-2B (same weights lineage as the base; tests "post-training as torso").
+    "Qwen/Qwen3.5-2B": {"markers": QWEN_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
+                        "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",
+                                         "in_proj_qkv", "in_proj_z", "in_proj_a", "in_proj_b", "out_proj"]},
+    # MiniCPM5 (OpenBMB, 2026-08/05): plain Llama-style full-attention stacks. FIM tokens saw pretraining;
+    # option markers are the pretrained <function ... </function> tool-list tokens (see MINICPM_MARKERS).
+    "openbmb/MiniCPM5-2B-Base": {"markers": MINICPM_MARKERS, "tap_layers": (21, 28, 35, 42), "n_layers": 42,
+                                 "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]},
+    "openbmb/MiniCPM5-1B-Base": {"markers": MINICPM_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
+                                 "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]},
     # LFM2.5: 14 layers (8 short-conv + 6 attention), all causal. FIM tokens saw pretraining;
     # the tool-list tokens are single added tokens with meaningful "list of items" semantics.
     "LiquidAI/LFM2.5-230M-Base": {"markers": {"state": "<|fim_pre|>", "q": "<|fim_mid|>", "opt": "<|tool_list_start|>",
@@ -109,7 +129,13 @@ TORSOS = {
 
 
 def torso_config(name: str) -> dict:
-    """Markers and tap layers for a torso, by full Hub id or by its short name."""
+    """Markers and tap layers for a torso, by full Hub id or by its short name.
+    An exported model directory (scripts/export.py) carries its own decider_torso.json."""
+    meta = Path(name) / "decider_torso.json"
+    if meta.exists():
+        cfg = json.loads(meta.read_text())
+        cfg["tap_layers"] = tuple(cfg["tap_layers"])
+        return cfg
     if name in TORSOS:
         return TORSOS[name]
     for k, v in TORSOS.items():
@@ -564,6 +590,13 @@ def load_torso(name: str, dtype=None, device: str = "cpu"):
     tok = AutoTokenizer.from_pretrained(name)
     model = AutoModel.from_pretrained(name, dtype=dtype or torch.float32)
     model = getattr(model, "language_model", model)
+    try:
+        tcfg = torso_config(name)
+    except KeyError:
+        tcfg = {}
+    if tcfg.get("skip_final_norm"):
+        # exported torsos are cut at the tap the head reads; the final norm must not touch that state
+        model.norm = torch.nn.Identity()
     model.to(device)
     cfg = getattr(model.config, "text_config", model.config)
     return tok, model, int(cfg.hidden_size)

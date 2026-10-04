@@ -192,11 +192,12 @@ def main(argv=None):
     ap.add_argument("--run", action="append", default=None, help="run dir with lora/, head.pt, config.json; repeat for an ensemble")
     ap.add_argument("--head", default=None, help="a head.pt to use (Tier A head on the frozen torso)")
     ap.add_argument("--port", type=int, default=8811)
+    ap.add_argument("--device", default=None, help="cuda | mps | cpu (default: best available)")
     ap.add_argument("--name", default="decider-autoresearch")
     ap.add_argument("--tta", nargs="?", const=2, default=1, type=int, help="average over N option orders for choice questions (default 1 = off; bare flag = 2)")
     a = ap.parse_args(argv)
     import torch
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = a.device or ("cuda" if torch.cuda.is_available() else ("mps" if torch.backends.mps.is_available() else "cpu"))
     runs = a.run or [None]
     d = Decider(a.torso, runs[0], a.head, device, tta=a.tta, extra_runs=runs[1:])
     print(f"serving {a.name} on http://127.0.0.1:{a.port}/v1/systemone (device {device}, tta {d.tta}, members {1 + len(d.members)}, temps {d.temps})", flush=True)

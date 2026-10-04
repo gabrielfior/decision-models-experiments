@@ -70,12 +70,12 @@ def write_trimmed_tokenizer(src_tok, out_dir: Path, cut: int) -> list[int]:
     return old_ids
 
 
-def truncate_torso(model, keep_layers: int):
+def truncate_torso(model, keep_layers: int, norm_attr: str = "norm"):
     """Keep the first keep_layers blocks and drop the final norm, so hidden_states[keep_layers] is the raw
     output of block keep_layers exactly as in the full model (the final norm would otherwise be applied to it)."""
     import torch
     model.layers = model.layers[:keep_layers]
-    model.norm = torch.nn.Identity()
+    setattr(model, norm_attr, torch.nn.Identity())
     model.config.num_hidden_layers = keep_layers
     if getattr(model.config, "layer_types", None) is not None:
         model.config.layer_types = list(model.config.layer_types)[:keep_layers]
@@ -106,7 +106,7 @@ def export(run: Path, out: Path, torso: str, keep_layers: int, vocab_cut: int | 
     if (run / "lora").exists():
         model = PeftModel.from_pretrained(model, run / "lora").merge_and_unload()
     n_before = sum(p.numel() for p in model.parameters())
-    model = truncate_torso(model, keep_layers)
+    model = truncate_torso(model, keep_layers, tcfg.get("final_norm_attr", "norm"))
     out_torso = out / "torso"
     out_torso.mkdir(parents=True, exist_ok=True)
     if vocab_cut:
@@ -120,7 +120,7 @@ def export(run: Path, out: Path, torso: str, keep_layers: int, vocab_cut: int | 
     # per-torso meta so prepare.torso_config() understands the exported directory
     taps = tuple(min(t, keep_layers) for t in tcfg["tap_layers"])
     meta = {"base": torso, "markers": tcfg["markers"], "tap_layers": list(taps), "n_layers": keep_layers,
-            "skip_final_norm": True, "lora_targets": tcfg["lora_targets"], "vocab_cut": vocab_cut,
+            "skip_final_norm": True, "final_norm_attr": tcfg.get("final_norm_attr", "norm"), "lora_targets": tcfg["lora_targets"], "vocab_cut": vocab_cut,
             "params": sum(p.numel() for p in model.parameters()), "params_before_export": n_before}
     (out_torso / TORSO_META).write_text(json.dumps(meta, indent=2))
     shutil.copy(run / "head.pt", out / "head.pt")

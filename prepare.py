@@ -110,6 +110,19 @@ TORSOS = {
                                  "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]},
     "openbmb/MiniCPM5-1B-Base": {"markers": MINICPM_MARKERS, "tap_layers": TAP_LAYERS, "n_layers": 24,
                                  "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]},
+    # IBM granite-swash-2b (2026-07, base, 2.14B incl. tied 100k embeddings): 24 layers, sliding-window (128) attention
+    # with a full-attention layer every third. FIM trio saw pretraining; <|start_of_plugin|>/<|end_of_plugin|> wrap
+    # one callable in a plugin list in Granite's chat format -- the "one candidate among several" role.
+    "ibm-granite/granite-swash-2b": {"markers": {"state": "<|fim_prefix|>", "q": "<|fim_middle|>", "opt": "<|start_of_plugin|>",
+                                                 "opt_end": "<|end_of_plugin|>", "decide": "<|fim_suffix|>"},
+                                     "tap_layers": TAP_LAYERS, "n_layers": 24,
+                                     "lora_targets": ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]},
+    # LiquidAI LFM2.5-2.6B-Base (2026-08): 30 layers (22 gated short-conv + 8 attention), 2.70B incl. tied 128k embeddings;
+    # cut at the layer-20 tap it is ~1.9B. Same tokenizer family and module names as the 230M entry below.
+    "LiquidAI/LFM2.5-2.6B-Base": {"markers": {"state": "<|fim_pre|>", "q": "<|fim_mid|>", "opt": "<|tool_list_start|>",
+                                               "opt_end": "<|tool_list_end|>", "decide": "<|fim_suf|>"},
+                                  "tap_layers": (15, 20, 25, 30), "n_layers": 30, "final_norm_attr": "embedding_norm",
+                                  "lora_targets": ["q_proj", "k_proj", "v_proj", "out_proj", "in_proj", "w1", "w2", "w3"]},
     # LFM2.5: 14 layers (8 short-conv + 6 attention), all causal. FIM tokens saw pretraining;
     # the tool-list tokens are single added tokens with meaningful "list of items" semantics.
     "LiquidAI/LFM2.5-230M-Base": {"markers": {"state": "<|fim_pre|>", "q": "<|fim_mid|>", "opt": "<|tool_list_start|>",
@@ -596,7 +609,7 @@ def load_torso(name: str, dtype=None, device: str = "cpu"):
         tcfg = {}
     if tcfg.get("skip_final_norm"):
         # exported torsos are cut at the tap the head reads; the final norm must not touch that state
-        model.norm = torch.nn.Identity()
+        setattr(model, tcfg.get("final_norm_attr", "norm"), torch.nn.Identity())
     model.to(device)
     cfg = getattr(model.config, "text_config", model.config)
     return tok, model, int(cfg.hidden_size)

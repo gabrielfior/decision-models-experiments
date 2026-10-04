@@ -74,6 +74,7 @@ LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln
           "tierB-2b-hybrid-2ep": "2B · hybrid read-out (pointer + letter logits)", "tierB-2b-hybrid-2ep-tta2": "2B · hybrid, TTA2", "tierB-2b-hybrid-2ep-tta4": "2B · hybrid, TTA4",
           "soup-8k-s01": "2B LoRA soup (8k seeds 0+1)", "soup-8k-s01-tta2": "2B soup 8k, TTA2", "soup-10k-s01": "2B LoRA soup (10k seeds 0+1)", "soup-10k-s01-tta2": "2B soup 10k, TTA2",
           "soup-all4": "2B LoRA soup (all 4)", "soup-all4-tta2": "2B soup all 4, TTA2", "2ep8k-retemp": "2B · 8k 2 epochs, temps refit", "2ep8k-retemp-tta2": "2B · 8k 2 epochs, temps refit, TTA2",
+          "2ep8k-s1": "2B · 8k, 2 epochs, seed 1", "2ep8k-s1-tta2": "2B · 8k, 2 epochs, seed 1, TTA2", "10k2ep-s1": "2B · 10k, 2 epochs, seed 1", "10k2ep-s1-tta2": "2B · 10k, 2 epochs, seed 1, TTA2",
           "ens-2ep8k+10k-tta2": "2B ensemble of 2, TTA2", "ens-2ep8k+10k-tta4": "2B ensemble of 2, TTA4", "ens-3-tta2": "2B ensemble of 3, TTA2", "ens-3-tta4": "2B ensemble of 3, TTA4"}
 
 

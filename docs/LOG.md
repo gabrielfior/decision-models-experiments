@@ -107,3 +107,10 @@ family left, so the 231 public JevBench items are their only generalisation chec
 abstain augmentation, hybrid letter-logit read-out, shuffle-consistency loss) with two-order averaging: **168/231 =
 0.727, Brier 0.370** — one decision over Strands' 167 with the same 8k training rows, inside one standard error.
 A two-member version scores 166. The third 9.9k seed was stopped at step 100 to stay under the $20 Modal line.
+
+**Extension (2026-10-04, +$10 Modal).** Third seeds: 9.9k recipe 168 plain / 171 with two-order averaging (three seeds
+with averaging: 168, 168, 171; three-seed ensemble 170 plain / **171 averaged, Brier 0.364**); 8k recipe 163 / 160 (three
+seeds with averaging: 167, 165, 160; four-member 8k-only ensembles 166–168). Consistency loss trained on the 9.9k rows:
+dev acc 0.770, order sensitivity 0.75%, JevBench 166 plain / 168 averaged, i.e. the same as the plain recipe. Final
+statement for the post: on 8k rows the recipe ties Strands (167); on 9.9k rows every seed passes it (168–171) and the
+three-seed ensemble reaches 171/231 = 0.740. Modal total $25.3, RunPod $3.3.

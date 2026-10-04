@@ -21,7 +21,11 @@ two option shuffles and the two canonical softmaxes are pulled together with a s
 R-Drop as well; it targets the order-sensitivity metric directly. Costs a second forward.
 Distillation (--kl-teacher data/teacher/<name>.jsonl --kl-weight a): scripts/teacher.py writes a teacher's option
 probabilities per row id in canonical order; the loss becomes (1 - a) CE + a KL(teacher || student) over the valid
-options, with the teacher vector permuted into the presented option order. Rows the file misses stay on CE."""
+options, with the teacher vector permuted into the presented option order. Rows the file misses stay on CE.
+Abstain augmentation (--augment, default off): each epoch the train rows pass through prepare.augment_row, which gives 10% of
+the choice rows (>= 3 options) a trailing "none of the above" option and, for a quarter of those, swaps the real options for
+labels harvested from other rows and makes the abstain option the answer — so the model has to read the options, not just
+the state. Redrawn per epoch; a teacher row whose length no longer matches falls back to CE."""
 from __future__ import annotations
 
 import argparse
@@ -234,7 +238,24 @@ def distill_loss(head, logits, labels, teacher_presented, has_teacher, opt_mask,
     l_n = head.loss(logits[~has], labels[~has])
     return (n_t * l_t + (B - n_t) * l_n) / B
 
-def main(argv=None):
+# ---- abstain / unrelated-label augmentation (--augment; prepare.augment_row) ------------------
+def augment_pool(rows: list[dict]) -> list[tuple]:
+    """The unrelated-label pool: every distinct (key, desc) option of the CHOICE rows, in a sorted (deterministic)
+    order. noul ("no"/"yes") and score (ordinal levels) options never enter it. Built once from train_rows;
+    augment_row filters out a row's own keys before drawing."""
+    seen = {tuple(o) for r in rows if r["qtype"] == "choice" for o in r["options"]}
+    return sorted(seen, key=repr)
+
+
+def epoch_rows(train_rows: list[dict], rng, augment: bool, pool) -> list[dict]:
+    """The row list fed to prepare.batches this epoch: train_rows itself when augmentation is off (the default
+    path is untouched), else a fresh augment_row draw per row, so each epoch sees a different augmentation."""
+    if not augment:
+        return train_rows
+    return [P.augment_row(r, rng, pool=pool) for r in train_rows]
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser()
     ap.add_argument("--note", required=True, help="one line: hypothesis for this run")
     ap.add_argument("--torso", default=TORSO)
@@ -259,6 +280,15 @@ def main(argv=None):
     ap.add_argument("--option-preview", action="store_true",
                     help="list the options (presented order, 6 tokens each) right after the [state] marker, before the state text "
                          "(option repetition, arXiv 2601.14152); recorded in config.json so serve.py encodes the same way")
+    ap.add_argument("--augment", action="store_true",
+                    help="abstain / unrelated-label augmentation (prepare.augment_row): each epoch, 10%% of choice rows with >= 3 options "
+                         "get a trailing 'none of the above' option; a quarter of those also have their options replaced by labels from "
+                         "other rows, with the abstain option as the answer. Redrawn every epoch.")
+    return ap
+
+
+def main(argv=None):
+    ap = build_parser()
     args = ap.parse_args(argv)
     apply_head_overrides(args.head_cfg)
     apply_micro_batch(args.micro_batch)
@@ -326,11 +356,17 @@ def main(argv=None):
 
     rng = np.random.default_rng(args.seed)   # numpy: encode_row shuffles options with it
     rows_by_id = {r["id"]: r for r in train_rows} if args.consistency > 0 else None
+    pool = augment_pool(train_rows) if args.augment else None
+    if args.augment:
+        print(f"augment: unrelated-label pool of {len(pool)} options from {len(train_rows)} train rows", flush=True)
     t0 = time.time()
     step = 0
     opt.zero_grad(set_to_none=True)
     for epoch in range(args.epochs):
-        for mb, batch in enumerate(P.batches(tok, train_rows, MICRO_BATCH, shuffle_options=True, rng=rng, device=device, markers=markers, shuffle_rows=True)):
+        rows = epoch_rows(train_rows, rng, args.augment, pool)   # == train_rows unless --augment (fresh draw per epoch)
+        if args.augment and rows_by_id is not None:
+            rows_by_id = {r["id"]: r for r in rows}               # the consistency re-encode must see the augmented options
+        for mb, batch in enumerate(P.batches(tok, rows, MICRO_BATCH, shuffle_options=True, rng=rng, device=device, markers=markers, shuffle_rows=True)):
             with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=device == "cuda"):
                 logits_per_head = forward_logits(torso, heads, batch, taps)
                 def base_loss(zs, b):
@@ -395,6 +431,7 @@ def main(argv=None):
                                                        "head": head_cfgs[-1], "heads": head_cfgs, "temps": temps, "torso": args.torso, "tap_layers": list(taps),
                                                        "kl_teacher": args.kl_teacher, "kl_weight": args.kl_weight if args.kl_teacher else None,
                                                        "option_preview": option_preview,
+                                                       **({"augment": True} if args.augment else {}),   # recorded only when on: default config.json unchanged
                                                        "report": report}, indent=2, default=str))
     print(json.dumps({k: v for k, v in report.items() if not isinstance(v, dict)}, indent=2, default=str))
 

@@ -1,0 +1,6 @@
+timestamp	commit	tier	note	seeds	dev_selection	dev_se	dev_acc	dev_brier	dev_ece	heldout_acc	heldout_brier	order_sens	p50_ms	kept	per_seed	baseline	code_hash
+2026-10-04T15:38:07	pod	B	MiniCPM5-1B-Base torso: LN16 head + LoRA r16, 2 epochs, 8k	1	0.5981	0.0112	0.7060	0.3664	0.0177	0.5090	0.5914	0.0220	17.1512	True	0.5981		53bb6ec8
+2026-10-04T17:12:21	pod	B	LFM2.5-2.6B-Base torso: LN tap-20 head + LoRA r16, 2 epochs, 8k	1	0.6674	0.0111	0.7625	0.3137	0.0302	0.6814	0.4307	0.0145	46.9478	False	0.6674	0.6752	53bb6ec8
+2026-10-04T18:01:42	pod	B	0.8B data lever: LN16 head + LoRA r16, 2 epochs, 9.9k rows (train+heldout), temps on dev	1	0.6429	0.0109	0.7400	0.3354	0.0175	nan	nan	0.0230	18.8218	False	0.6429	0.6752	53bb6ec8
+2026-10-04T18:57:57	pod	B	granite-swash-2b torso: LN16 head + LoRA r16, 2 epochs, 8k	1	0.6406	0.0108	0.7385	0.3305	0.0157	0.4968	0.5978	0.0625	40.1570	False	0.6406	0.6752	53bb6ec8
+2026-10-04T15:58:22	c4becad	B	MiniCPM5-2B-Base torso: LN tap-28 head + LoRA r16, 2 epochs, 8k	1	0.6776	0.0107	0.7650	0.3066	0.0206	0.7300	0.3728	0.0195	54.4026	True	0.6776		53bb6ec8

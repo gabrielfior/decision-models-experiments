@@ -132,12 +132,15 @@ not in the tables), but distilled and instruct torsos were excluded by decision:
 | MiniCPM5-2B-Base (Aug 2026), 42 L, tap 28 | 2.52B | 0.765 / 0.307 | 0.730 | 152 / 155 | 0.405 |
 | MiniCPM5-1B-Base (May 2026), 24 L, tap 16 | 1.08B | 0.706 / 0.366 | 0.509 | 134 / 135 | 0.493 |
 | LFM2.5-2.6B-Base (Aug 2026), 30 L, tap 20 | 2.70B | 0.7625 / 0.314 | 0.681 | 158 / 157 | 0.429 |
-| granite-swash-2b (Jul 2026), 24 L, tap 16 | 2.14B | GRANITE_DEV | | GRANITE_JEV | |
-| Qwen3.5-0.8B-Base, 8k (session 1) | 0.87B | 0.741 | | 152 | |
+| granite-swash-2b (Jul 2026), 24 L, tap 16 | 2.14B | 0.7385 / 0.331 | 0.497 | 150 / 153 | 0.445 |
+| Qwen3.5-0.8B-Base, 8k (session 1) | 0.87B | 0.741 / 0.33 | | 152 / — | 0.44 |
+| Qwen3.5-0.8B-Base, 9.9k rows (data lever) | 0.87B | 0.740 / 0.335 | — | 150 / 152 | 0.454 |
 
 MiniCPM5-2B is the instructive case: better in-distribution dev numbers than Qwen3.5-2B and +3 points on the held-out
 decision-v7 families, yet 10 decisions worse on JevBench. The JevBench items are the only out-of-corpus check we have,
-and on them the Qwen3.5 torso generalises best. OTHER_TORSO_SENTENCE
+and on them the Qwen3.5 torso generalises best. LFM2.5-2.6B (158/157) and granite-swash-2b (150/153) land below the Qwen band as well, with Brier 0.43–0.45 against
+0.37–0.39; granite's sliding-window attention (128 tokens, full attention every third layer) also collapses on the
+held-out families (0.50). Ranking torsos by JevBench, not by dev, is the rule this session established.
 
 *Cactus Compute.* Their own models (needle 1/2/3, 26–121M) are from-scratch attention-only function callers trained on
 100–360B synthetic tokens with 2-bit quantisation-aware training; none of that grafts onto a pretrained torso, and on
@@ -156,4 +159,7 @@ acc 0.769 / 0.3113 / 0.676; JevBench 165 / 167 (two-order) vs 166 / 168 for the 
 noise. Weight-only quantisation of the 16-layer model on dev: INT8 per-channel acc 0.771 / Brier 0.311 (free);
 INT4 group-128 acc 0.7645 / Brier 0.322 (−0.4 points, +0.01 Brier). `scripts/export.py` writes the artefact
 (merged LoRA, 16 layers, trimmed tokenizer, head, temperatures); `serve.py --torso <export>/torso --run <export>` serves it.
-SMALL_QWEN_SENTENCE
+The data lever that lifted the 2B from 162–164 to 166–168 does nothing for the 0.8B (152 -> 150/152): the extra
+families only help a torso with capacity to spare, so the smallest useful model remains the cut-down 2B.
+Session 3 spend: Modal $2.36 (two 2B runs), RunPod $0.98 (community 3090 at $0.22/hr: four runs plus two failed
+launches when the 20 GB volume filled with Xet chunk cache), Mac: ~4 h of MPS evaluation and scoring. Pod stopped.

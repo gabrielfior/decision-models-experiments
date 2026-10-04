@@ -365,3 +365,11 @@ def test_option_preview_counts_in_the_row_budget_and_truncates_the_state_first()
     assert all(enc["ids"][p] == 903 for p in enc["opt_pos"])
     # the options kept at least as much text as they had without the preview
     assert all(len(b) >= len(a) for a, b in zip(_option_segments(plain), _option_segments(enc)))
+
+
+def test_flatten_renders_structured_option_descriptions_as_text():
+    rec = _record("r1", "legacy_policy")
+    rec["questions"]["q_choice"]["criteria"] = {"a": {"rule": "x", "limit": 3}, "b": None, "c": "C"}
+    row = P.flatten([rec])[0]
+    assert all(d is None or isinstance(d, str) for _, d in row["options"])
+    assert "rule: x" in row["options"][0][1]

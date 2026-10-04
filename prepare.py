@@ -262,15 +262,17 @@ def load_records(path: Path) -> list[dict]:
 def _option_list(q: dict) -> tuple[list[tuple[str, str | None]], int | None]:
     """Turn a Kev/JevBench question into an ordered option list and an integer label (None if unlabeled)."""
     t, crit, label = q["type"], q.get("criteria"), q.get("label")
+    def desc(x):   # 715 corpus descriptions are dicts (e.g. agnews {"what": ...}); render them like states
+        return None if x is None else (x if isinstance(x, str) else as_text(x))
     if t == "noul":
         crit = crit or {}
-        options = [("no", crit.get("false")), ("yes", crit.get("true"))]
+        options = [("no", desc(crit.get("false"))), ("yes", desc(crit.get("true")))]
         return options, (None if label is None else int(bool(label)))
     if t == "score":
-        return [(str(i), desc) for i, desc in enumerate(crit)], (None if label is None else int(label))
+        return [(str(i), desc(d)) for i, d in enumerate(crit)], (None if label is None else int(label))
     if t == "choice":
         keys = list(crit.keys())
-        return [(k, crit[k]) for k in keys], (None if label is None else keys.index(label))
+        return [(k, desc(crit[k])) for k in keys], (None if label is None else keys.index(label))
     raise ValueError(f"unknown question type {t!r}")
 
 

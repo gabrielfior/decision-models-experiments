@@ -82,6 +82,7 @@ LABELS = {"tierB-baseline-plain-pointer": "0.8B · plain head + LoRA", "tierB-ln
           "preview-2ep": "2B · option preview before state, 2 epochs", "preview-2ep-tta2": "2B · option preview, TTA2",
           "ens-9k9+aug-tta2": "2B · 9.9k seeds 0+1 + augmentation, ensemble of 3, TTA2",
           "tierB-2b-consistency": "2B · shuffle-consistency loss (R-Drop), 2 epochs", "tierB-2b-consistency-tta2": "2B · consistency loss, TTA2", "tierB-2b-consistency-tta4": "2B · consistency loss, TTA4",
+          "ens-8k-only-s1+aug-tta2": "2B · 8k rows only: ensemble of 2 variants, TTA2", "ens-8k-only-4-tta2": "2B · 8k rows only: ensemble of 4 architecture variants, TTA2",
           "ens-2ep8k+10k-tta2": "2B ensemble of 2, TTA2", "ens-2ep8k+10k-tta4": "2B ensemble of 2, TTA4", "ens-3-tta2": "2B ensemble of 3, TTA2", "ens-3-tta4": "2B ensemble of 3, TTA4"}
 
 

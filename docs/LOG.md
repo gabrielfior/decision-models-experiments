@@ -102,3 +102,8 @@ hybrid letter logits, consistency loss, augmentation, option preview, ensembles,
 165–167 = Strands' 167. So the honest claim is: **our recipe ties Strands Decider 2B on 8k rows and passes it with
 24% more training data.** The extra decisions are a data contribution; and the 9.9k models have no held-out task
 family left, so the 231 public JevBench items are their only generalisation check.
+
+**Architecture-only ensemble (8k rows, no extra data).** Averaging four of our 8k-row variants (LayerNorm@16 seed 1,
+abstain augmentation, hybrid letter-logit read-out, shuffle-consistency loss) with two-order averaging: **168/231 =
+0.727, Brier 0.370** — one decision over Strands' 167 with the same 8k training rows, inside one standard error.
+A two-member version scores 166. The third 9.9k seed was stopped at step 100 to stay under the $20 Modal line.
